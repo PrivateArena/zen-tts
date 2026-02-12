@@ -1,0 +1,16 @@
+*.zip
+*.exe
+*.tar
+*.gz
+zen-tts
+bin/
+vendor/
+build/
+go.work
+go.work.sum
+tls-client/
+fhttp/
+utls/
+www/
+piper/
+models/

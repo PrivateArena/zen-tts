@@ -1,0 +1,194 @@
+package main
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
+)
+
+// --- THEME (Stolen from your tui/core/theme.go) ---
+var (
+	ColorBackground = tcell.NewHexColor(0x121212)
+	ColorPanel      = tcell.NewHexColor(0x282828)
+	ColorBorder     = tcell.NewHexColor(0x444444)
+	ColorFocus      = tcell.NewHexColor(0x5f87af)
+	ColorText       = tcell.NewHexColor(0xeeeeee)
+	ColorTextDim    = tcell.NewHexColor(0xaaaaaa)
+	ColorSuccess    = tcell.ColorGreen
+)
+
+func setupTheme() {
+	tview.Styles.PrimitiveBackgroundColor = ColorBackground
+	tview.Styles.ContrastBackgroundColor = ColorPanel
+	tview.Styles.MoreContrastBackgroundColor = ColorPanel
+	tview.Styles.BorderColor = ColorBorder
+	tview.Styles.TitleColor = ColorFocus
+	tview.Styles.PrimaryTextColor = ColorText
+	tview.Styles.SecondaryTextColor = ColorTextDim
+	tview.Styles.TertiaryTextColor = ColorSuccess
+}
+
+// --- UI DATA MODEL ---
+type UIVoice struct {
+	Key      string
+	Language string
+	Name     string
+	Quality  string
+}
+
+// --- MAIN UI ENTRY POINT ---
+func runTUI(registry VoiceRegistry, port int, cpuCore int) {
+	setupTheme()
+	app := tview.NewApplication()
+
+	// 1. Prepare Data
+	var voices []UIVoice
+	for key, info := range registry {
+		voices = append(voices, UIVoice{
+			Key:      key,
+			Language: info.Language.NameEnglish,
+			Name:     info.Language.Code, // Using Code as short name
+			Quality:  info.Quality,
+		})
+	}
+	// Sort by Language -> Name -> Quality
+	sort.Slice(voices, func(i, j int) bool {
+		if voices[i].Language != voices[j].Language {
+			return voices[i].Language < voices[j].Language
+		}
+		return voices[i].Key < voices[j].Key
+	})
+
+	filteredVoices := make([]UIVoice, len(voices))
+	copy(filteredVoices, voices)
+
+	// 2. Components
+	table := tview.NewTable().SetBorders(false)
+	table.SetSelectable(true, false)
+	table.SetFixed(1, 0) // Fix header row
+	table.SetBackgroundColor(ColorBackground)
+
+	searchField := tview.NewInputField()
+	searchField.SetLabel("  Search: ")
+	searchField.SetLabelColor(ColorFocus)
+	searchField.SetFieldBackgroundColor(ColorPanel)
+	searchField.SetFieldTextColor(ColorText)
+
+	statusBar := tview.NewTextView().SetDynamicColors(true)
+	statusBar.SetTextAlign(tview.AlignCenter)
+	statusBar.SetText("[#5f87af]↑/↓: Navigate • Enter: Start Server • /: Search • Esc: Quit[-]")
+
+	// 3. Helper: Refresh Table
+	refreshTable := func() {
+		table.Clear()
+		
+		// Header
+		headers := []string{"Language", "Voice Key", "Quality"}
+		for i, h := range headers {
+			table.SetCell(0, i, tview.NewTableCell(fmt.Sprintf(" %s ", h)).
+				SetTextColor(ColorFocus).
+				SetSelectable(false).
+				SetAttributes(tcell.AttrBold))
+		}
+
+		// Rows
+		for i, v := range filteredVoices {
+			row := i + 1
+			
+			// Color logic based on quality
+			qColor := ColorTextDim
+			if v.Quality == "high" {
+				qColor = tcell.ColorGreen
+			} else if v.Quality == "medium" {
+				qColor = tcell.ColorYellow
+			}
+
+			table.SetCell(row, 0, tview.NewTableCell(" "+v.Language).SetTextColor(ColorText))
+			table.SetCell(row, 1, tview.NewTableCell(" "+v.Key).SetTextColor(ColorFocus))
+			table.SetCell(row, 2, tview.NewTableCell(" "+v.Quality).SetTextColor(qColor))
+		}
+		
+		// Restore selection logic
+		if table.GetRowCount() > 1 {
+			table.Select(1, 0)
+		}
+		
+		table.ScrollToBeginning()
+	}
+
+	// 4. Logic: Filter
+	doSearch := func(text string) {
+		term := strings.ToLower(text)
+		filteredVoices = nil
+		for _, v := range voices {
+			if strings.Contains(strings.ToLower(v.Key), term) || 
+			   strings.Contains(strings.ToLower(v.Language), term) {
+				filteredVoices = append(filteredVoices, v)
+			}
+		}
+		refreshTable()
+	}
+
+	searchField.SetChangedFunc(doSearch)
+	
+	// 5. Logic: Selection & Start
+	startServer := func(voiceKey string) {
+		app.Stop() // Close TUI
+		
+		// Clear screen
+		fmt.Print("\033[H\033[2J")
+		fmt.Printf(">>> Selected Voice: %s\n", voiceKey)
+		
+		// Reuse existing startup logic
+		// We have to call the logic from main.go here. 
+		// Ideally refactor main.go's logic into a `StartServer` function.
+		// For now, we'll assume we can pass control back or call a function.
+		startEngine(voiceKey, port, cpuCore, registry)
+	}
+
+	table.SetSelectedFunc(func(row, column int) {
+		if row > 0 && row <= len(filteredVoices) {
+			selected := filteredVoices[row-1]
+			startServer(selected.Key)
+		}
+	})
+
+	// 6. Input Capture (Keyboard Shortcuts)
+	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEsc {
+			app.Stop()
+			return nil
+		}
+		// "/" to focus search
+		if event.Rune() == '/' {
+			app.SetFocus(searchField)
+			return nil
+		}
+		return event
+	})
+
+	searchField.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter || key == tcell.KeyEsc {
+			app.SetFocus(table)
+		}
+	})
+
+	// 7. Layout
+	flex := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(searchField, 1, 0, false).
+		AddItem(tview.NewBox(), 1, 0, false). // Padding
+		AddItem(table, 0, 1, true).
+		AddItem(statusBar, 1, 0, false)
+
+	// Border around the table
+	table.SetBorder(true).SetTitle(" Available Voices ")
+
+	refreshTable()
+	
+	if err := app.SetRoot(flex, true).EnableMouse(true).Run(); err != nil {
+		panic(err)
+	}
+}

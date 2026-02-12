@@ -1,0 +1,31 @@
+{
+  "last_model": "en_US-ryan-medium",
+  "port": 5000,
+  "replacements": [
+    {
+      "pattern": "Kee{3,}",
+      "replacement": "Key",
+      "is_regex": true
+    },
+    {
+      "pattern": "Kya{2,}k!",
+      "replacement": "Scream!",
+      "is_regex": true
+    },
+    {
+      "pattern": "bang!",
+      "replacement": "Bang!",
+      "is_regex": false
+    },
+    {
+      "pattern": "Lv.",
+      "replacement": "Level",
+      "is_regex": false
+    },
+    {
+      "pattern": "https?://\\S+",
+      "replacement": "Link removed.",
+      "is_regex": false
+    }
+  ]
+}
