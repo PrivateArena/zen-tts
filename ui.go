@@ -180,18 +180,26 @@ func buildRules() *tview.Flex {
 		table.SetCell(0, 1, tview.NewTableCell(" Pattern ").SetTextColor(ColorFocus).SetSelectable(false))
 		table.SetCell(0, 2, tview.NewTableCell(" Replacement ").SetTextColor(ColorFocus).SetSelectable(false))
 
-		for i, rule := range CurrentConfig.Replacements {
+		for i, rule := range RawRules {
 			y := i + 1
+			parts := strings.SplitN(rule, "::", 2)
+			if len(parts) < 2 { continue }
+
 			typeStr := "TEXT"
-			if rule.IsRegex { typeStr = "REGEX" }
-			table.SetCell(y, 0, tview.NewTableCell(typeStr).SetTextColor(ColorDim))
-			table.SetCell(y, 1, tview.NewTableCell(rule.Pattern).SetTextColor(ColorText))
-			table.SetCell(y, 2, tview.NewTableCell(rule.Replacement).SetTextColor(ColorSuccess))
+			pattern := parts[0]
+			if strings.HasPrefix(pattern, "re:") {
+				typeStr = "REGEX"
+				pattern = strings.TrimPrefix(pattern, "re:")
+			}
+			
+			table.SetCell(y, 0, tview.NewTableCell(" "+typeStr+" ").SetTextColor(ColorDim))
+			table.SetCell(y, 1, tview.NewTableCell(pattern).SetTextColor(ColorText))
+			table.SetCell(y, 2, tview.NewTableCell(parts[1]).SetTextColor(ColorSuccess))
 		}
 	}
 
 	help := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignCenter)
-	help.SetText("[gray]Edit 'config.json' manually to add rules (UI Editor coming soon)[-]")
+	help.SetText("[gray]Edit 'replacements.txt' manually to add rules (UI Editor coming soon)[-]")
 
 	refresh()
 	

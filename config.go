@@ -5,30 +5,25 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 )
 
 const (
-	VoicesFile   = "voices.json"
-	ConfigFile   = "config.json"
-	PiperDir     = "./piper"
-	PiperBinary  = "./piper/piper"
-	ModelDir     = "./models"
-	DownloadBase = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/"
+	VoicesFile       = "voices.json"
+	ConfigFile       = "config.json"
+	ReplacementsFile = "replacements.txt"
+	PiperDir         = "./piper"
+	PiperBinary      = "./piper/piper"
+	ModelDir         = "./models"
+	DownloadBase     = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/"
 )
 
 // --- DATA STRUCTURES ---
 
-type ReplacementRule struct {
-	Pattern     string `json:"pattern"`
-	Replacement string `json:"replacement"`
-	IsRegex     bool   `json:"is_regex"`
-}
-
 type Config struct {
-	LastModel    string            `json:"last_model"`
-	Port         int               `json:"port"`
-	Replacements []ReplacementRule `json:"replacements"`
+	LastModel string `json:"last_model"`
+	Port      int    `json:"port"`
 }
 
 type VoiceRegistry map[string]struct {
@@ -51,23 +46,25 @@ type TTSRequest struct {
 var (
 	CurrentConfig Config
 	Registry      VoiceRegistry
-	RegexCache    map[string]*regexp.Regexp
+	PlainReplacer *strings.Replacer
+	RegexRules    []RegexRule
+	RawRules      []string
 	ConfigMu      sync.RWMutex
 )
+
+type RegexRule struct {
+	Re          *regexp.Regexp
+	Replacement string
+	Guard       string // Lowercase token that must exist in text to trigger regex
+}
 
 // --- METHODS ---
 
 func LoadConfig() {
-	RegexCache = make(map[string]*regexp.Regexp)
-	
 	// Defaults
 	CurrentConfig = Config{
 		Port:      5000,
 		LastModel: "en_US-amy-low",
-		Replacements: []ReplacementRule{
-			{Pattern: "Kee{3,}", Replacement: "Key", IsRegex: true},
-			{Pattern: "https?://\\S+", Replacement: "Link removed", IsRegex: true},
-		},
 	}
 
 	file, err := os.ReadFile(ConfigFile)
@@ -75,30 +72,79 @@ func LoadConfig() {
 		json.Unmarshal(file, &CurrentConfig)
 	}
 
-	CompileRegex()
+	LoadReplacements()
 }
 
 func SaveConfig() {
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
-	
+
 	data, _ := json.MarshalIndent(CurrentConfig, "", "  ")
 	os.WriteFile(ConfigFile, data, 0644)
-	
-	// Recompile regex whenever config is saved/changed
-	CompileRegex()
 }
 
-func CompileRegex() {
-	// Compile regex safely
-	for _, r := range CurrentConfig.Replacements {
-		if r.IsRegex {
-			re, err := regexp.Compile("(?i)" + r.Pattern)
+func LoadReplacements() {
+	ConfigMu.Lock()
+	defer ConfigMu.Unlock()
+
+	data, err := os.ReadFile(ReplacementsFile)
+	if err != nil {
+		// Create empty file if not exists
+		os.WriteFile(ReplacementsFile, []byte(""), 0644)
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var plainPairs []string
+	var regexes []RegexRule
+	var rawLines []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		rawLines = append(rawLines, line)
+
+		parts := strings.Split(line, "::")
+		if len(parts) < 2 {
+			continue
+		}
+
+		pattern := parts[0]
+		var guard, replacement string
+
+		if len(parts) == 3 {
+			guard = strings.ToLower(parts[1])
+			replacement = strings.ReplaceAll(parts[2], "\\n", "\n")
+		} else {
+			replacement = strings.ReplaceAll(parts[1], "\\n", "\n")
+		}
+
+		if strings.HasPrefix(pattern, "re:") {
+			cleanPat := strings.TrimPrefix(pattern, "re:")
+			re, err := regexp.Compile("(?i)" + cleanPat)
 			if err == nil {
-				RegexCache[r.Pattern] = re
+				regexes = append(regexes, RegexRule{Re: re, Replacement: replacement, Guard: guard})
 			}
+		} else if strings.HasPrefix(pattern, "ci:") {
+			cleanPat := strings.TrimPrefix(pattern, "ci:")
+			re, err := regexp.Compile("(?i)" + regexp.QuoteMeta(cleanPat))
+			if err == nil {
+				// For ci: rules, the guard is just the lowercased pattern itself if not provided
+				if guard == "" {
+					guard = strings.ToLower(cleanPat)
+				}
+				regexes = append(regexes, RegexRule{Re: re, Replacement: replacement, Guard: guard})
+			}
+		} else {
+			plainPairs = append(plainPairs, pattern, replacement)
 		}
 	}
+
+	PlainReplacer = strings.NewReplacer(plainPairs...)
+	RegexRules = regexes
+	RawRules = rawLines
 }
 
 func LoadRegistry() {

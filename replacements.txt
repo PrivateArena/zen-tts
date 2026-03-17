@@ -1,0 +1,22 @@
+# --- CASE SENSITIVE PLAIN (Fastest) ---
+bang!::Bang!
+
+# --- CASE INSENSITIVE PLAIN (Safe, dot is literal) ---
+ci:Lv.::Level
+ci:Ill::I'll
+ci:wont::won't
+ci:cant::can't
+ci:dont::don't
+ci:thats::that's
+ci:lets::let's
+ci:wouldnt::wouldn't
+
+# --- REGEX (Powerful patterns) ---
+re:\. ([Tt]o \w+)::: $1
+re:https?://\S+::(Link Removed)
+re:Kee{3,}::Key
+re:Kya{2,}k!::Scream!
+
+# --- CLEANUP ---
+re: \.::.
+re:\s{2,}:: 

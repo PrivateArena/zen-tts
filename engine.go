@@ -30,18 +30,21 @@ func normalizeText(text string) string {
 	ConfigMu.RLock()
 	defer ConfigMu.RUnlock()
 
-	// 1. Custom Rules
-	for _, rule := range CurrentConfig.Replacements {
-		if rule.IsRegex {
-			if re, ok := RegexCache[rule.Pattern]; ok {
-				text = re.ReplaceAllString(text, rule.Replacement)
-			}
-		} else {
-			text = strings.ReplaceAll(text, rule.Pattern, rule.Replacement)
-		}
+	// 1. High-Performance Plain Text Replacements (O(N) pass)
+	if PlainReplacer != nil {
+		text = PlainReplacer.Replace(text)
 	}
 
-	// 2. Generic Safety (Squash repeats)
+	// 2. Regex Replacements (Only for complex patterns)
+	lowerText := strings.ToLower(text)
+	for _, rule := range RegexRules {
+		if rule.Guard != "" && !strings.Contains(lowerText, rule.Guard) {
+			continue
+		}
+		text = rule.Re.ReplaceAllString(text, rule.Replacement)
+	}
+
+	// 3. Generic Safety (Squash repeats)
 	return squashRepeats(text, 3)
 }
 

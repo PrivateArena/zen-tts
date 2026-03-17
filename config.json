@@ -8,8 +8,48 @@
       "is_regex": true
     },
     {
-      "pattern": "Kya{2,}k!",
-      "replacement": "Scream!",
+      "pattern": "https?://\\S+",
+      "replacement": "Link removed.",
+      "is_regex": true
+    },
+    {
+      "pattern": "\\bIll\\b",
+      "replacement": "I'll",
+      "is_regex": true
+    },
+    {
+      "pattern": "\\bwont\\b",
+      "replacement": "won't",
+      "is_regex": true
+    },
+    {
+      "pattern": "\\bcant\\b",
+      "replacement": "can't",
+      "is_regex": true
+    },
+    {
+      "pattern": "\\bdont\\b",
+      "replacement": "don't",
+      "is_regex": true
+    },
+    {
+      "pattern": "\\bThats\\b",
+      "replacement": "That's",
+      "is_regex": true
+    },
+    {
+      "pattern": "\\bLets\\b",
+      "replacement": "Let's",
+      "is_regex": true
+    },
+    {
+      "pattern": "\\bwouldnt\\b",
+      "replacement": "wouldn't",
+      "is_regex": true
+    },
+    {
+      "pattern": "\\. ([Tt]o \\w+)",
+      "replacement": ": $1",
       "is_regex": true
     },
     {
@@ -20,11 +60,6 @@
     {
       "pattern": "Lv.",
       "replacement": "Level",
-      "is_regex": false
-    },
-    {
-      "pattern": "https?://\\S+",
-      "replacement": "Link removed.",
       "is_regex": false
     }
   ]
