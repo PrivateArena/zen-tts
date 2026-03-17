@@ -17,6 +17,19 @@ re:https?://\S+::(Link Removed)
 re:Kee{3,}::Key
 re:Kya{2,}k!::Scream!
 
+# --- INFORMAL / SHORTHAND (Standard TTS Normalization) ---
+ci:btw::by the way
+ci:wanna::want to
+ci:gonna::going to
+ci:gotta::got to
+ci:dunno::don't know
+ci:plz::please
+ci:u::you
+ci:r::are
+ci:idk::I don't know
+ci:im::I'm
+
 # --- CLEANUP ---
 re: \.::.
 re:\s{2,}:: 
+re:\.{3,}::...
