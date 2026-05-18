@@ -2,22 +2,18 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 )
 
-const (
-	VoicesFile       = "voices.json"
-	ConfigFile       = "config.json"
-	ReplacementsFile = "replacements.txt"
-	PiperDir         = "./piper"
-	PiperBinary      = "./piper/piper"
-	ModelDir         = "./models"
-	DownloadBase     = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/"
-)
+
 
 // --- DATA STRUCTURES ---
 
@@ -201,4 +197,106 @@ func LoadRegistry() {
 		}
 		Registry[size.key] = entry
 	}
+}
+
+// --- FILE HELPERS ---
+
+func getModelPaths(key string) (string, string) {
+	ConfigMu.RLock()
+	info, ok := Registry[key]
+	ConfigMu.RUnlock()
+
+	if !ok {
+		return "", ""
+	}
+	var onnx, conf string
+	for f := range info.Files {
+		if strings.HasSuffix(f, ".onnx") {
+			onnx = f
+		}
+		if strings.HasSuffix(f, ".json") {
+			conf = f
+		}
+	}
+
+	var localOnnx, localConf string
+	if strings.HasPrefix(key, "kokoro") {
+		localOnnx = filepath.Join(ModelDir, "kokoro", "kokoro-v0.19.onnx")
+		localConf = filepath.Join(ModelDir, "kokoro", "kokoro-v0.19.json")
+		os.MkdirAll(filepath.Join(ModelDir, "kokoro"), 0755)
+	} else if strings.HasPrefix(key, "kitten") {
+		localOnnx = filepath.Join(ModelDir, "kitten", key+".onnx")
+		localConf = filepath.Join(ModelDir, "kitten", key+".json")
+		os.MkdirAll(filepath.Join(ModelDir, "kitten"), 0755)
+	} else {
+		localOnnx = filepath.Join(ModelDir, "piper", filepath.Base(onnx))
+		localConf = filepath.Join(ModelDir, "piper", filepath.Base(conf))
+		os.MkdirAll(filepath.Join(ModelDir, "piper"), 0755)
+	}
+
+	if strings.HasPrefix(key, "kokoro") {
+		// Auto-download Kokoro-82M onnx community model and config
+		downloadIfNeeded(localOnnx, KokoroOnnxURL)
+		downloadIfNeeded(localConf, KokoroConfURL)
+
+		// Create voices directory and download default voice
+		voicesDir := filepath.Join(ModelDir, "kokoro", "voices")
+		os.MkdirAll(voicesDir, 0755)
+		downloadIfNeeded(filepath.Join(voicesDir, "af_bella.bin"), KokoroBellaURL)
+		downloadIfNeeded(filepath.Join(voicesDir, "af_jasper.bin"), KokoroJasperURL)
+	} else if strings.HasPrefix(key, "kitten") {
+		// Auto-download KittenTTS onnx and config
+		onnxURL := KittenMiniOnnxURL
+		confURL := KittenMiniConfURL
+		if key == "kitten-tts-micro" {
+			onnxURL = KittenMicroOnnxURL
+			confURL = KittenMicroConfURL
+		} else if key == "kitten-tts-nano" {
+			onnxURL = KittenNanoOnnxURL
+			confURL = KittenNanoConfURL
+		}
+		downloadIfNeeded(localOnnx, onnxURL)
+		downloadIfNeeded(localConf, confURL)
+		downloadIfNeeded(filepath.Join(ModelDir, "kitten", "voices.npz"), KittenVoicesURL)
+	} else {
+		// Piper-specific download URLs
+		downloadIfNeeded(localOnnx, PiperDownloadBase+onnx)
+		downloadIfNeeded(localConf, PiperDownloadBase+conf)
+	}
+
+	return localOnnx, localConf
+}
+
+func downloadIfNeeded(path, url string) {
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	LogMsg(fmt.Sprintf("Downloading %s...", filepath.Base(path)))
+	resp, err := http.Get(url)
+	if err != nil {
+		LogMsg(fmt.Sprintf("[red]Download error: %v[-]", err))
+		return
+	}
+	defer resp.Body.Close()
+	out, err := os.Create(path)
+	if err != nil {
+		LogMsg(fmt.Sprintf("[red]Error creating file %s: %v[-]", path, err))
+		return
+	}
+	defer out.Close()
+	io.Copy(out, resp.Body)
+}
+
+func getSampleRate(path string) int {
+	f, _ := os.ReadFile(path)
+	var d struct {
+		Audio struct {
+			SampleRate int `json:"sample_rate"`
+		} `json:"audio"`
+	}
+	json.Unmarshal(f, &d)
+	if d.Audio.SampleRate == 0 {
+		return 22050
+	}
+	return d.Audio.SampleRate
 }
