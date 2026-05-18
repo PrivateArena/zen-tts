@@ -324,16 +324,20 @@ func getModelPaths(key string) (string, string) {
 		}
 	}
 
-	localOnnx := filepath.Join(ModelDir, filepath.Base(onnx))
-	localConf := filepath.Join(ModelDir, filepath.Base(conf))
+	var localOnnx, localConf string
 	if strings.HasPrefix(key, "kokoro") {
-		localOnnx = filepath.Join(ModelDir, "kokoro-v0.19.onnx")
-		localConf = filepath.Join(ModelDir, "kokoro-v0.19.json")
+		localOnnx = filepath.Join(ModelDir, "kokoro", "kokoro-v0.19.onnx")
+		localConf = filepath.Join(ModelDir, "kokoro", "kokoro-v0.19.json")
+		os.MkdirAll(filepath.Join(ModelDir, "kokoro"), 0755)
 	} else if strings.HasPrefix(key, "kitten") {
-		localOnnx = filepath.Join(ModelDir, key+".onnx")
-		localConf = filepath.Join(ModelDir, key+".json")
+		localOnnx = filepath.Join(ModelDir, "kitten", key+".onnx")
+		localConf = filepath.Join(ModelDir, "kitten", key+".json")
+		os.MkdirAll(filepath.Join(ModelDir, "kitten"), 0755)
+	} else {
+		localOnnx = filepath.Join(ModelDir, "piper", filepath.Base(onnx))
+		localConf = filepath.Join(ModelDir, "piper", filepath.Base(conf))
+		os.MkdirAll(filepath.Join(ModelDir, "piper"), 0755)
 	}
-	os.MkdirAll(ModelDir, 0755)
 
 	if strings.HasPrefix(key, "kokoro") {
 		// Auto-download Kokoro-82M onnx community model and config
@@ -343,7 +347,7 @@ func getModelPaths(key string) (string, string) {
 		downloadIfNeeded(localConf, confURL)
 
 		// Create voices directory and download default voice
-		voicesDir := filepath.Join(ModelDir, "voices")
+		voicesDir := filepath.Join(ModelDir, "kokoro", "voices")
 		os.MkdirAll(voicesDir, 0755)
 		downloadIfNeeded(filepath.Join(voicesDir, "af_bella.bin"), "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_bella.bin")
 		downloadIfNeeded(filepath.Join(voicesDir, "af_jasper.bin"), "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_jasper.bin")
@@ -360,7 +364,7 @@ func getModelPaths(key string) (string, string) {
 		}
 		downloadIfNeeded(localOnnx, onnxURL)
 		downloadIfNeeded(localConf, confURL)
-		downloadIfNeeded(filepath.Join(ModelDir, "voices.npz"), "https://huggingface.co/KittenML/kitten-tts-mini-0.8/resolve/main/voices.npz")
+		downloadIfNeeded(filepath.Join(ModelDir, "kitten", "voices.npz"), "https://huggingface.co/KittenML/kitten-tts-mini-0.8/resolve/main/voices.npz")
 	} else {
 		// Piper-specific download URLs
 		downloadIfNeeded(localOnnx, DownloadBase+onnx)
