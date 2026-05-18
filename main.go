@@ -24,18 +24,22 @@ func main() {
 
 	DebugMode = *debugPtr
 
-	// Check Binary
-	if _, err := os.Stat(PiperBinary); os.IsNotExist(err) {
-		log.Fatalf("❌ Critical: Piper binary not found at %s", PiperBinary)
-	}
-
 	// Initialization
 	LoadConfig()
 	LoadRegistry()
 
 	// Apply CLI overrides to config
-	if *portPtr != 0 { CurrentConfig.Port = *portPtr }
-	if *modelPtr != "" { CurrentConfig.LastModel = *modelPtr }
+	if *portPtr != 0 {
+		CurrentConfig.Port = *portPtr
+	}
+	if *modelPtr != "" {
+		CurrentConfig.LastModel = *modelPtr
+	}
+
+	// Verify dependencies directory exists
+	if _, err := os.Stat(PiperDir); os.IsNotExist(err) {
+		log.Fatalf("❌ Critical: Dependencies directory not found at %s. Please ensure piper files are extracted.", PiperDir)
+	}
 
 	if *uiPtr {
 		RunTUI(CurrentConfig.Port, *cpuPtr)

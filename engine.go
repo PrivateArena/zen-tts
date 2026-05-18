@@ -5,13 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+
+	"zen-tts/internal/kitten"
+	"zen-tts/internal/kokoro"
 	"zen-tts/internal/piper"
 )
 
@@ -21,9 +23,21 @@ var (
 	ActiveModel   string
 	serverSrv     *http.Server
 	serverMu      sync.Mutex
-	activeSynth   *piper.Synthesizer
+	activeSynth   TTSEngine
 	activeSynthMu sync.Mutex
 )
+
+// TTSEngine provides a unified contract for text-to-speech backends.
+type TTSEngine interface {
+	// Initialize boots the ONNX sessions, binds allocator symbols, and loads voice profiles.
+	Initialize(modelPath string, configPath string) error
+
+	// Synthesize converts text to raw PCM 32-bit float or 16-bit int data.
+	Synthesize(text string, voice string, speed float32) ([]float32, int, error)
+
+	// Close tears down CGO memory footprints and terminates runtime instances safely.
+	Close() error
+}
 
 // --- TEXT NORMALIZATION ---
 
@@ -140,7 +154,7 @@ func StartServer(modelName string, port int, cpuCore int) {
 		return
 	}
 
-	LogMsg(fmt.Sprintf("[yellow]Initializing CGO engine for %s...[-]", modelName))
+	LogMsg(fmt.Sprintf("[yellow]Initializing engine for %s...[-]", modelName))
 
 	onnxPath, configPath := getModelPaths(modelName)
 	if onnxPath == "" {
@@ -148,12 +162,22 @@ func StartServer(modelName string, port int, cpuCore int) {
 		return
 	}
 
-	absPiper, _ := filepath.Abs(PiperDir)
-	espeakData := filepath.Join(absPiper, "espeak-ng-data-v1-gpl")
+	var engine TTSEngine
+	var err error
 
-	synth, err := piper.NewSynthesizer(onnxPath, configPath, espeakData)
+	if strings.HasPrefix(modelName, "kokoro") {
+		engine = &kokoro.KokoroEngine{}
+		err = engine.Initialize(onnxPath, configPath)
+	} else if strings.HasPrefix(modelName, "kitten") {
+		engine = &kitten.KittenEngine{}
+		err = engine.Initialize(onnxPath, configPath)
+	} else {
+		engine = &piper.PiperEngine{}
+		err = engine.Initialize(onnxPath, configPath)
+	}
+
 	if err != nil {
-		LogMsg(fmt.Sprintf("[red]Piper Init Error: %v[-]", err))
+		LogMsg(fmt.Sprintf("[red]Engine Initialization Error: %v[-]", err))
 		return
 	}
 
@@ -161,15 +185,14 @@ func StartServer(modelName string, port int, cpuCore int) {
 	if activeSynth != nil {
 		activeSynth.Close()
 	}
-	activeSynth = synth
+	activeSynth = engine
 	activeSynthMu.Unlock()
 
-	sampleRate := getSampleRate(configPath)
 	ActiveModel = modelName
 	ServerPort = port
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/tts", ttsHandler(sampleRate))
+	mux.HandleFunc("/tts", ttsHandler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/tts" {
 			http.NotFound(w, r)
@@ -179,7 +202,7 @@ func StartServer(modelName string, port int, cpuCore int) {
 	serverSrv = &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux}
 
 	go func() {
-		LogMsg(fmt.Sprintf("[green]CGO Server started on :%d using %s[-]", port, modelName))
+		LogMsg(fmt.Sprintf("[green]Server started on :%d using %s[-]", port, modelName))
 		if err := serverSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			LogMsg(fmt.Sprintf("[red]Server Error: %v[-]", err))
 			ServerActive = false
@@ -212,8 +235,6 @@ func StopServer() {
 }
 
 func ToggleServer(model string, port int, cpuCore int) {
-	// We don't lock here because Start/Stop have their own locks
-	// and we want to allow the UI update loop to read the state in between if needed
 	if ServerActive {
 		StopServer()
 	} else {
@@ -223,78 +244,70 @@ func ToggleServer(model string, port int, cpuCore int) {
 
 // --- HTTP HANDLER ---
 
-func ttsHandler(sampleRate int) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-			return
-		}
-		if r.Method != http.MethodPost {
-			http.Error(w, "405 Method Not Allowed", 405)
-			return
-		}
-
-		var req TTSRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Bad JSON", 400)
-			return
-		}
-
-		text := normalizeText(req.Text)
-		if text == "" {
-			http.Error(w, "Empty text", 400)
-			return
-		}
-
-		userSpeed := req.Speed
-		if userSpeed <= 0 {
-			userSpeed = 1.0
-		}
-		lengthScale := 1.0 / userSpeed
-		lengthScale = math.Max(0.1, math.Min(lengthScale, 5.0))
-
-		LogMsg(fmt.Sprintf("CGO Processing %d chars | Speed: %.1fx", len(text), userSpeed))
-
-		activeSynthMu.Lock()
-		synth := activeSynth
-		activeSynthMu.Unlock()
-
-		if synth == nil {
-			http.Error(w, "Engine not initialized", 500)
-			return
-		}
-
-		opts := synth.DefaultOptions()
-		opts.LengthScale = float32(lengthScale)
-
-		var audioData []byte
-		err := synth.Synthesize(text, &opts, func(samples []float32, rate int) bool {
-			// Convert float32 samples to int16 PCM
-			for _, s := range samples {
-				val := int16(s * 32767.0)
-				audioData = append(audioData, byte(val&0xff), byte(val>>8))
-			}
-			return true
-		})
-
-		if err != nil {
-			LogMsg(fmt.Sprintf("[red]Synthesize Error: %v[-]", err))
-			http.Error(w, "Generation Failed", 500)
-			return
-		}
-
-		w.Header().Set("Content-Type", "audio/wav")
+func ttsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		writeWavHeader(w, sampleRate, len(audioData))
-		w.Write(audioData)
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		return
 	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "405 Method Not Allowed", 405)
+		return
+	}
+
+	var req TTSRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad JSON", 400)
+		return
+	}
+
+	text := normalizeText(req.Text)
+	if text == "" {
+		http.Error(w, "Empty text", 400)
+		return
+	}
+
+	userSpeed := req.Speed
+	if userSpeed <= 0 {
+		userSpeed = 1.0
+	}
+
+	LogMsg(fmt.Sprintf("Processing %d chars | Speed: %.1fx | Voice: %s", len(text), userSpeed, req.Voice))
+
+	activeSynthMu.Lock()
+	synth := activeSynth
+	activeSynthMu.Unlock()
+
+	if synth == nil {
+		http.Error(w, "Engine not initialized", 500)
+		return
+	}
+
+	// Synthesize using decoupled engine
+	samples, sampleRate, err := synth.Synthesize(text, req.Voice, float32(userSpeed))
+	if err != nil {
+		LogMsg(fmt.Sprintf("[red]Synthesize Error: %v[-]", err))
+		http.Error(w, "Generation Failed", 500)
+		return
+	}
+
+	// Convert float32 samples to int16 PCM
+	audioData := make([]byte, 0, len(samples)*2)
+	for _, s := range samples {
+		val := int16(s * 32767.0)
+		audioData = append(audioData, byte(val&0xff), byte(val>>8))
+	}
+
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	writeWavHeader(w, sampleRate, len(audioData))
+	w.Write(audioData)
 }
 
 // --- FILE HELPERS ---
 
 func getModelPaths(key string) (string, string) {
-	ConfigMu.RLock() // Use Registry via config lock or assume registry is immutable after load
+	ConfigMu.RLock()
 	info, ok := Registry[key]
 	ConfigMu.RUnlock()
 
@@ -306,7 +319,7 @@ func getModelPaths(key string) (string, string) {
 		if strings.HasSuffix(f, ".onnx") {
 			onnx = f
 		}
-		if strings.HasSuffix(f, ".onnx.json") {
+		if strings.HasSuffix(f, ".json") {
 			conf = f
 		}
 	}
@@ -315,8 +328,35 @@ func getModelPaths(key string) (string, string) {
 	localConf := filepath.Join(ModelDir, filepath.Base(conf))
 	os.MkdirAll(ModelDir, 0755)
 
-	downloadIfNeeded(localOnnx, DownloadBase+onnx)
-	downloadIfNeeded(localConf, DownloadBase+conf)
+	if strings.HasPrefix(key, "kokoro") {
+		// Auto-download Kokoro-82M onnx community model and config
+		onnxURL := "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model.onnx"
+		confURL := "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json"
+		downloadIfNeeded(localOnnx, onnxURL)
+		downloadIfNeeded(localConf, confURL)
+
+		// Create voices directory and download default voice
+		voicesDir := filepath.Join(ModelDir, "voices")
+		os.MkdirAll(voicesDir, 0755)
+		downloadIfNeeded(filepath.Join(voicesDir, "en_bella.bin"), "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/en_bella.pt")
+		downloadIfNeeded(filepath.Join(voicesDir, "en_jasper.bin"), "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/en_jasper.pt")
+	} else if strings.HasPrefix(key, "kitten") {
+		// Auto-download KittenTTS onnx and config
+		onnxURL := "https://huggingface.co/KittenML/kitten-tts-mini-0.8/resolve/main/model.onnx"
+		if key == "kitten-tts-micro" {
+			onnxURL = "https://huggingface.co/KittenML/kitten-tts-micro-0.8/resolve/main/model.onnx"
+		} else if key == "kitten-tts-nano" {
+			onnxURL = "https://huggingface.co/KittenML/kitten-tts-nano-0.8/resolve/main/model.onnx"
+		}
+		confURL := "https://huggingface.co/KittenML/kitten-tts-mini-0.8/resolve/main/config.json"
+		downloadIfNeeded(localOnnx, onnxURL)
+		downloadIfNeeded(localConf, confURL)
+	} else {
+		// Piper-specific download URLs
+		downloadIfNeeded(localOnnx, DownloadBase+onnx)
+		downloadIfNeeded(localConf, DownloadBase+conf)
+	}
+
 	return localOnnx, localConf
 }
 
@@ -325,9 +365,18 @@ func downloadIfNeeded(path, url string) {
 		return
 	}
 	LogMsg(fmt.Sprintf("Downloading %s...", filepath.Base(path)))
-	resp, _ := http.Get(url)
+	resp, err := http.Get(url)
+	if err != nil {
+		LogMsg(fmt.Sprintf("[red]Download error: %v[-]", err))
+		return
+	}
 	defer resp.Body.Close()
-	out, _ := os.Create(path)
+	out, err := os.Create(path)
+	if err != nil {
+		LogMsg(fmt.Sprintf("[red]Error creating file %s: %v[-]", path, err))
+		return
+	}
+	defer out.Close()
 	io.Copy(out, resp.Body)
 }
 

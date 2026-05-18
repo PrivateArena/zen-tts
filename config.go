@@ -22,8 +22,12 @@ const (
 // --- DATA STRUCTURES ---
 
 type Config struct {
-	LastModel string `json:"last_model"`
-	Port      int    `json:"port"`
+	LastModel  string  `json:"last_model"`
+	Port       int     `json:"port"`
+	EngineType string  `json:"engine_type"`
+	Voice      string  `json:"voice"`
+	Speed      float64 `json:"speed"`
+	SampleRate int     `json:"sample_rate"`
 }
 
 type VoiceRegistry map[string]struct {
@@ -38,6 +42,7 @@ type VoiceRegistry map[string]struct {
 
 type TTSRequest struct {
 	Text  string  `json:"text"`
+	Voice string  `json:"voice"`
 	Speed float64 `json:"speed"`
 }
 
@@ -63,8 +68,12 @@ type RegexRule struct {
 func LoadConfig() {
 	// Defaults
 	CurrentConfig = Config{
-		Port:      5000,
-		LastModel: "en_US-amy-low",
+		Port:       5000,
+		LastModel:  "en_US-amy-low",
+		EngineType: "piper",
+		Voice:      "",
+		Speed:      1.0,
+		SampleRate: 0,
 	}
 
 	file, err := os.ReadFile(ConfigFile)
@@ -155,4 +164,55 @@ func LoadRegistry() {
 	if err := json.Unmarshal(file, &Registry); err != nil {
 		log.Fatalf("❌ Error parsing %s: %v", VoicesFile, err)
 	}
+
+	// Dynamic injection of Kokoro-82M into the registry
+	kokoroEntry := struct {
+		Key      string `json:"key"`
+		Language struct {
+			Code        string `json:"code"`
+			NameEnglish string `json:"name_english"`
+		} `json:"language"`
+		Quality string                 `json:"quality"`
+		Files   map[string]interface{} `json:"files"`
+	}{}
+	kokoroEntry.Key = "kokoro-v1.0"
+	kokoroEntry.Language.Code = "en_US"
+	kokoroEntry.Language.NameEnglish = "English (Kokoro Realism)"
+	kokoroEntry.Quality = "high"
+	kokoroEntry.Files = map[string]interface{}{
+		"kokoro-v0.19.onnx": nil,
+		"config.json":       nil,
+	}
+	Registry["kokoro-v1.0"] = kokoroEntry
+
+	// Dynamic injection of KittenTTS models into the registry
+	kittenMiniEntry := kokoroEntry
+	kittenMiniEntry.Key = "kitten-tts-mini"
+	kittenMiniEntry.Language.NameEnglish = "English (KittenTTS Mini)"
+	kittenMiniEntry.Quality = "high"
+	kittenMiniEntry.Files = map[string]interface{}{
+		"kitten-tts-mini.onnx": nil,
+		"config.json":          nil,
+	}
+	Registry["kitten-tts-mini"] = kittenMiniEntry
+
+	kittenMicroEntry := kokoroEntry
+	kittenMicroEntry.Key = "kitten-tts-micro"
+	kittenMicroEntry.Language.NameEnglish = "English (KittenTTS Micro)"
+	kittenMicroEntry.Quality = "medium"
+	kittenMicroEntry.Files = map[string]interface{}{
+		"kitten-tts-micro.onnx": nil,
+		"config.json":           nil,
+	}
+	Registry["kitten-tts-micro"] = kittenMicroEntry
+
+	kittenNanoEntry := kokoroEntry
+	kittenNanoEntry.Key = "kitten-tts-nano"
+	kittenNanoEntry.Language.NameEnglish = "English (KittenTTS Nano)"
+	kittenNanoEntry.Quality = "low"
+	kittenNanoEntry.Files = map[string]interface{}{
+		"kitten-tts-nano.onnx": nil,
+		"config.json":          nil,
+	}
+	Registry["kitten-tts-nano"] = kittenNanoEntry
 }
