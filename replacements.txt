@@ -24,8 +24,8 @@ ci:gonna::going to
 ci:gotta::got to
 ci:dunno::don't know
 ci:plz::please
-ci:u::you
-ci:r::are
+re:\bu\b::you
+re:\br\b::are
 ci:idk::I don't know
 ci:im::I'm
 

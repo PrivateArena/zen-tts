@@ -326,6 +326,13 @@ func getModelPaths(key string) (string, string) {
 
 	localOnnx := filepath.Join(ModelDir, filepath.Base(onnx))
 	localConf := filepath.Join(ModelDir, filepath.Base(conf))
+	if strings.HasPrefix(key, "kokoro") {
+		localOnnx = filepath.Join(ModelDir, "kokoro-v0.19.onnx")
+		localConf = filepath.Join(ModelDir, "kokoro-v0.19.json")
+	} else if strings.HasPrefix(key, "kitten") {
+		localOnnx = filepath.Join(ModelDir, key+".onnx")
+		localConf = filepath.Join(ModelDir, key+".json")
+	}
 	os.MkdirAll(ModelDir, 0755)
 
 	if strings.HasPrefix(key, "kokoro") {
