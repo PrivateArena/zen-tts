@@ -338,19 +338,22 @@ func getModelPaths(key string) (string, string) {
 		// Create voices directory and download default voice
 		voicesDir := filepath.Join(ModelDir, "voices")
 		os.MkdirAll(voicesDir, 0755)
-		downloadIfNeeded(filepath.Join(voicesDir, "en_bella.bin"), "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/en_bella.pt")
-		downloadIfNeeded(filepath.Join(voicesDir, "en_jasper.bin"), "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/en_jasper.pt")
+		downloadIfNeeded(filepath.Join(voicesDir, "af_bella.bin"), "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_bella.bin")
+		downloadIfNeeded(filepath.Join(voicesDir, "af_jasper.bin"), "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_jasper.bin")
 	} else if strings.HasPrefix(key, "kitten") {
 		// Auto-download KittenTTS onnx and config
-		onnxURL := "https://huggingface.co/KittenML/kitten-tts-mini-0.8/resolve/main/model.onnx"
-		if key == "kitten-tts-micro" {
-			onnxURL = "https://huggingface.co/KittenML/kitten-tts-micro-0.8/resolve/main/model.onnx"
-		} else if key == "kitten-tts-nano" {
-			onnxURL = "https://huggingface.co/KittenML/kitten-tts-nano-0.8/resolve/main/model.onnx"
-		}
+		onnxURL := "https://huggingface.co/KittenML/kitten-tts-mini-0.8/resolve/main/kitten_tts_mini_v0_8.onnx"
 		confURL := "https://huggingface.co/KittenML/kitten-tts-mini-0.8/resolve/main/config.json"
+		if key == "kitten-tts-micro" {
+			onnxURL = "https://huggingface.co/KittenML/kitten-tts-micro-0.8/resolve/main/kitten_tts_micro_v0_8.onnx"
+			confURL = "https://huggingface.co/KittenML/kitten-tts-micro-0.8/resolve/main/config.json"
+		} else if key == "kitten-tts-nano" {
+			onnxURL = "https://huggingface.co/KittenML/kitten-tts-nano-0.8/resolve/main/kitten_tts_nano_v0_8.onnx"
+			confURL = "https://huggingface.co/KittenML/kitten-tts-nano-0.8/resolve/main/config.json"
+		}
 		downloadIfNeeded(localOnnx, onnxURL)
 		downloadIfNeeded(localConf, confURL)
+		downloadIfNeeded(filepath.Join(ModelDir, "voices.npz"), "https://huggingface.co/KittenML/kitten-tts-mini-0.8/resolve/main/voices.npz")
 	} else {
 		// Piper-specific download URLs
 		downloadIfNeeded(localOnnx, DownloadBase+onnx)

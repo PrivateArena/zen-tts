@@ -96,21 +96,18 @@ func (e *KokoroEngine) Initialize(modelPath string, configPath string) error {
 }
 
 func (e *KokoroEngine) Synthesize(text string, voice string, speed float32) ([]float32, int, error) {
-	styleVec, ok := e.voices[strings.ToLower(voice)]
+	voiceData, ok := e.voices[strings.ToLower(voice)]
 	if !ok {
 		for k, vec := range e.voices {
 			if strings.Contains(k, strings.ToLower(voice)) || strings.Contains(strings.ToLower(voice), k) {
-				styleVec = vec
+				voiceData = vec
 				break
 			}
 		}
-		if len(styleVec) == 0 {
+		if len(voiceData) == 0 {
 			for _, vec := range e.voices {
-				styleVec = vec
+				voiceData = vec
 				break
-			}
-			if len(styleVec) == 0 {
-				styleVec = make([]float32, 256)
 			}
 		}
 	}
@@ -118,6 +115,19 @@ func (e *KokoroEngine) Synthesize(text string, voice string, speed float32) ([]f
 	tokens := e.tokenize(text)
 	if len(tokens) == 0 {
 		return nil, e.sampleRate, fmt.Errorf("no tokens mapped from text")
+	}
+
+	// Extract voice style embedding corresponding to the token sequence length
+	styleVec := make([]float32, 256)
+	numEmbeds := len(voiceData) / 256
+	if numEmbeds > 0 {
+		idx := len(tokens)
+		if idx >= numEmbeds {
+			idx = numEmbeds - 1
+		}
+		copy(styleVec, voiceData[idx*256:(idx+1)*256])
+	} else if len(voiceData) >= 256 {
+		copy(styleVec, voiceData[:256])
 	}
 
 	tokensShape := ort.NewShape(1, int64(len(tokens)))
@@ -134,22 +144,22 @@ func (e *KokoroEngine) Synthesize(text string, voice string, speed float32) ([]f
 	}
 	defer styleTensor.Destroy()
 
-	// In Kokoro, dynamic output size is used
-	outputShape := ort.NewShape(1, 240000) // Up to 10 seconds of output
+	// In Kokoro, output size is exactly len(tokens) * 1200
+	outputShape := ort.NewShape(1, int64(len(tokens)*1200))
 	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer outputTensor.Destroy()
 
-	// Try running session with "tokens", "style", "speed" inputs first, then fallback to "tokens", "style"
+	// Try running session with "input_ids", "style", "speed" inputs first, then fallback to "input_ids", "style"
 	var session *ort.AdvancedSession
 	speedShape := ort.NewShape(1)
 	speedTensor, err := ort.NewTensor(speedShape, []float32{speed})
 	if err == nil {
 		session, err = ort.NewAdvancedSession(e.modelPath,
-			[]string{"tokens", "style", "speed"},
-			[]string{"audio"},
+			[]string{"input_ids", "style", "speed"},
+			[]string{"waveform"},
 			[]ort.ArbitraryTensor{tokensTensor, styleTensor, speedTensor},
 			[]ort.ArbitraryTensor{outputTensor},
 			nil)
@@ -157,10 +167,10 @@ func (e *KokoroEngine) Synthesize(text string, voice string, speed float32) ([]f
 	}
 
 	if err != nil {
-		// Fallback to "tokens", "style" only
+		// Fallback to "input_ids", "style" only
 		session, err = ort.NewAdvancedSession(e.modelPath,
-			[]string{"tokens", "style"},
-			[]string{"audio"},
+			[]string{"input_ids", "style"},
+			[]string{"waveform"},
 			[]ort.ArbitraryTensor{tokensTensor, styleTensor},
 			[]ort.ArbitraryTensor{outputTensor},
 			nil)
