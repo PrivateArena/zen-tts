@@ -120,33 +120,6 @@ func ToggleServer(model string, port int, cpuCore int) {
 	}
 }
 
-func splitIntoSentences(text string) []string {
-	var sentences []string
-	var current strings.Builder
-
-	runes := []rune(text)
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		current.WriteRune(r)
-		if r == '.' || r == '!' || r == '?' || r == '。' || r == '！' || r == '？' || r == '\n' {
-			trimmed := strings.TrimSpace(current.String())
-			if trimmed != "" {
-				sentences = append(sentences, trimmed)
-			}
-			current.Reset()
-		}
-	}
-	trimmed := strings.TrimSpace(current.String())
-	if trimmed != "" {
-		sentences = append(sentences, trimmed)
-	}
-
-	if len(sentences) == 0 {
-		return []string{text}
-	}
-	return sentences
-}
-
 // --- HTTP HANDLER ---
 
 func ttsHandler(w http.ResponseWriter, r *http.Request) {
@@ -211,6 +184,10 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Query().Get("play") == "true" || req.Play {
 		playAudio(audioData, sampleRate)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Write([]byte(`{"status":"playing"}`))
+		return
 	}
 
 	w.Header().Set("Content-Type", "audio/wav")
