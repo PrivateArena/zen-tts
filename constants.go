@@ -16,10 +16,9 @@ const (
 	PiperDownloadBase = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/"
 
 	// Kokoro-82M
-	KokoroOnnxURL   = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model.onnx"
-	KokoroConfURL   = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json"
-	KokoroBellaURL  = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_bella.bin"
-	KokoroJasperURL = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_jasper.bin"
+	KokoroOnnxURL  = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model.onnx"
+	KokoroConfURL  = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json"
+	KokoroBellaURL = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_bella.bin"
 
 	// KittenTTS
 	KittenVoicesURL   = "https://huggingface.co/KittenML/kitten-tts-mini-0.8/resolve/main/voices.npz"

@@ -41,7 +41,10 @@ func (e *KokoroEngine) Initialize(modelPath string, configPath string) error {
 				vName := strings.TrimSuffix(f.Name(), filepath.Ext(f.Name()))
 				vPath := filepath.Join(voicesDir, f.Name())
 				vec, err := loadVoiceVector(vPath)
-				if err == nil {
+				if err != nil {
+					fmt.Printf("[Kokoro] Error loading voice style '%s': %v. Deleting corrupt file.\n", f.Name(), err)
+					os.Remove(vPath)
+				} else {
 					e.voices[strings.ToLower(vName)] = vec
 				}
 			}

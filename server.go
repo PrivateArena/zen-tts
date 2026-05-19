@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"zen-tts/internal/kitten"
 	"zen-tts/internal/kokoro"
@@ -119,6 +120,33 @@ func ToggleServer(model string, port int, cpuCore int) {
 	}
 }
 
+func splitIntoSentences(text string) []string {
+	var sentences []string
+	var current strings.Builder
+
+	runes := []rune(text)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		current.WriteRune(r)
+		if r == '.' || r == '!' || r == '?' || r == '。' || r == '！' || r == '？' || r == '\n' {
+			trimmed := strings.TrimSpace(current.String())
+			if trimmed != "" {
+				sentences = append(sentences, trimmed)
+			}
+			current.Reset()
+		}
+	}
+	trimmed := strings.TrimSpace(current.String())
+	if trimmed != "" {
+		sentences = append(sentences, trimmed)
+	}
+
+	if len(sentences) == 0 {
+		return []string{text}
+	}
+	return sentences
+}
+
 // --- HTTP HANDLER ---
 
 func ttsHandler(w http.ResponseWriter, r *http.Request) {
@@ -162,18 +190,27 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Synthesize using decoupled engine
+	startTime := time.Now()
 	samples, sampleRate, err := synth.Synthesize(text, req.Voice, float32(userSpeed))
+	processTime := time.Since(startTime)
 	if err != nil {
 		LogMsg(fmt.Sprintf("[red]Synthesize Error: %v[-]", err))
 		http.Error(w, "Generation Failed", 500)
 		return
 	}
 
+	audioDuration := float64(len(samples)) / float64(sampleRate)
+	LogMsg(fmt.Sprintf("[green]Synthesized in %v | Playback Duration: %.2fs[-]", processTime, audioDuration))
+
 	// Convert float32 samples to int16 PCM
 	audioData := make([]byte, 0, len(samples)*2)
 	for _, s := range samples {
 		val := int16(s * 32767.0)
 		audioData = append(audioData, byte(val&0xff), byte(val>>8))
+	}
+
+	if r.URL.Query().Get("play") == "true" || req.Play {
+		playAudio(audioData, sampleRate)
 	}
 
 	w.Header().Set("Content-Type", "audio/wav")

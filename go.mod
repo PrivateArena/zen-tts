@@ -5,6 +5,7 @@ go 1.24.0
 toolchain go1.24.13
 
 require (
+	github.com/ebitengine/oto/v3 v3.4.0
 	github.com/gdamore/tcell/v2 v2.13.8
 	github.com/ikawaha/kagome-dict/ipa v1.2.6
 	github.com/ikawaha/kagome/v2 v2.11.0
@@ -13,6 +14,7 @@ require (
 )
 
 require (
+	github.com/ebitengine/purego v0.9.0 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/ikawaha/kagome-dict v1.1.7 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect

@@ -42,6 +42,7 @@ type TTSRequest struct {
 	Text  string  `json:"text"`
 	Voice string  `json:"voice"`
 	Speed float64 `json:"speed"`
+	Play  bool    `json:"play"`
 }
 
 // --- GLOBAL STATE ---
@@ -243,7 +244,6 @@ func getModelPaths(key string) (string, string) {
 		voicesDir := filepath.Join(ModelDir, "kokoro", "voices")
 		os.MkdirAll(voicesDir, 0755)
 		downloadIfNeeded(filepath.Join(voicesDir, "af_bella.bin"), KokoroBellaURL)
-		downloadIfNeeded(filepath.Join(voicesDir, "af_jasper.bin"), KokoroJasperURL)
 	} else if strings.HasPrefix(key, "kitten") {
 		// Auto-download KittenTTS onnx and config
 		onnxURL := KittenMiniOnnxURL
@@ -268,8 +268,11 @@ func getModelPaths(key string) (string, string) {
 }
 
 func downloadIfNeeded(path, url string) {
-	if _, err := os.Stat(path); err == nil {
-		return
+	if fi, err := os.Stat(path); err == nil {
+		if fi.Size() > 200 {
+			return
+		}
+		os.Remove(path)
 	}
 	LogMsg(fmt.Sprintf("Downloading %s...", filepath.Base(path)))
 	resp, err := http.Get(url)
@@ -278,6 +281,12 @@ func downloadIfNeeded(path, url string) {
 		return
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		LogMsg(fmt.Sprintf("[red]Download failed for %s: HTTP %d %s[-]", filepath.Base(path), resp.StatusCode, resp.Status))
+		return
+	}
+
 	out, err := os.Create(path)
 	if err != nil {
 		LogMsg(fmt.Sprintf("[red]Error creating file %s: %v[-]", path, err))
