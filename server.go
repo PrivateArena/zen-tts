@@ -68,9 +68,10 @@ func StartServer(modelName string, port int, cpuCore int) {
 	ServerPort = port
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/tts", ttsHandler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/tts" {
+		if r.URL.Path == "/" || r.URL.Path == "/tts" {
+			ttsHandler(w, r)
+		} else {
 			http.NotFound(w, r)
 		}
 	})

@@ -11,6 +11,9 @@ import (
 	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
+
+	"github.com/ikawaha/kagome-dict/ipa"
+	"github.com/ikawaha/kagome/v2/tokenizer"
 )
 
 var (
@@ -51,13 +54,16 @@ var Vocab = map[string]int64{
 	"ʰ": 162, "ʲ": 164, "↓": 169, "→": 171, "↗": 172, "↘": 173, "ᵻ": 177,
 }
 
-// Phonemize converts raw English text into IPA phonemes using the local espeak-ng/piper_phonemize subprocess
-func Phonemize(text string) ([]string, error) {
+// Phonemize converts raw text into IPA phonemes using the local espeak-ng/piper_phonemize subprocess for a specific language
+func Phonemize(text string, lang string) ([]string, error) {
+	if lang == "" {
+		lang = "en-us"
+	}
 	absPiper, _ := filepath.Abs("./piper")
 	cmdPath := filepath.Join(absPiper, "piper_phonemize")
 	espeakData := filepath.Join(absPiper, "espeak-ng-data-v1-gpl")
 
-	cmd := exec.Command(cmdPath, "-l", "en-us", "--espeak_data", espeakData)
+	cmd := exec.Command(cmdPath, "-l", lang, "--espeak_data", espeakData)
 	cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH="+absPiper)
 
 	var stdin bytes.Buffer
@@ -71,27 +77,137 @@ func Phonemize(text string) ([]string, error) {
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
-	if err != nil {
-		return nil, fmt.Errorf("failed to run phonemize: %v, stderr: %s", err, stderr.String())
-	}
+	stdoutStr := stdout.String()
+	stderrStr := stderr.String()
 
+	// First try parsing stdout as a whole
 	var result struct {
 		Phonemes []string `json:"phonemes"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal phonemizer output: %v", err)
+	if json.Unmarshal([]byte(stdoutStr), &result) == nil && len(result.Phonemes) > 0 {
+		return result.Phonemes, nil
 	}
 
-	return result.Phonemes, nil
+	// If stdout failed or was empty, search both stdout and stderr line-by-line for JSON block
+	combined := stdoutStr + "\n" + stderrStr
+	lines := strings.Split(combined, "\n")
+	for _, line := range lines {
+		idx := strings.Index(line, `{"phoneme_ids"`)
+		if idx == -1 {
+			idx = strings.Index(line, `{"phonemes"`)
+		}
+		if idx == -1 {
+			idx = strings.Index(line, "{")
+		}
+		if idx != -1 {
+			jsonStr := line[idx:]
+			var res struct {
+				Phonemes []string `json:"phonemes"`
+			}
+			if json.Unmarshal([]byte(jsonStr), &res) == nil && len(res.Phonemes) > 0 {
+				return res.Phonemes, nil
+			}
+		}
+	}
+
+	// If everything failed, report error
+	if err != nil {
+		return nil, fmt.Errorf("failed to run phonemize: %v, stderr: %s", err, stderrStr)
+	}
+	return nil, fmt.Errorf("could not find valid phonemes JSON in outputs (stdout len: %d, stderr len: %d)", len(stdoutStr), len(stderrStr))
 }
 
-// Tokenize converts IPA phonemes or fallback characters into an ONNX-compatible ID sequence
+// GetLanguageCode extracts the piper_phonemize language code based on Kokoro voice name prefixes
+func GetLanguageCode(voice string) string {
+	voice = strings.ToLower(voice)
+	if strings.HasPrefix(voice, "bf_") || strings.HasPrefix(voice, "bm_") {
+		return "en-gb"
+	}
+	if strings.HasPrefix(voice, "zf_") || strings.HasPrefix(voice, "zm_") {
+		return "cmn"
+	}
+	if strings.HasPrefix(voice, "jf_") || strings.HasPrefix(voice, "jm_") {
+		return "ja"
+	}
+	if strings.HasPrefix(voice, "ef_") || strings.HasPrefix(voice, "em_") {
+		return "es"
+	}
+	if strings.HasPrefix(voice, "ff_") {
+		return "fr"
+	}
+	if strings.HasPrefix(voice, "if_") || strings.HasPrefix(voice, "im_") {
+		return "it"
+	}
+	if strings.HasPrefix(voice, "pf_") || strings.HasPrefix(voice, "pm_") {
+		return "pt-br"
+	}
+	if strings.HasPrefix(voice, "hf_") || strings.HasPrefix(voice, "hm_") {
+		return "hi"
+	}
+	return "en-us"
+}
+
+// Tokenize converts IPA phonemes or fallback characters into an ONNX-compatible ID sequence for English (US)
 func Tokenize(text string) []int64 {
+	return TokenizeWithVoice(text, "en-us")
+}
+
+var (
+	jpTokenizer     *tokenizer.Tokenizer
+	jpTokenizerOnce sync.Once
+)
+
+func getJpTokenizer() *tokenizer.Tokenizer {
+	jpTokenizerOnce.Do(func() {
+		t, err := tokenizer.New(ipa.Dict(), tokenizer.OmitBosEos())
+		if err == nil {
+			jpTokenizer = t
+		}
+	})
+	return jpTokenizer
+}
+
+func ConvertKanjiToHiragana(text string) string {
+	t := getJpTokenizer()
+	if t == nil {
+		return text
+	}
+	tokens := t.Tokenize(text)
+	var result []string
+	for _, token := range tokens {
+		reading, ok := token.Reading()
+		if ok {
+			result = append(result, katakanaToHiragana(reading))
+		} else {
+			result = append(result, token.Surface)
+		}
+	}
+	return strings.Join(result, "")
+}
+
+func katakanaToHiragana(s string) string {
+	var sb strings.Builder
+	for _, r := range s {
+		if r >= 0x30A1 && r <= 0x30F6 {
+			sb.WriteRune(r - 0x60)
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
+// TokenizeWithVoice converts IPA phonemes into an ONNX ID sequence using the language code mapped to a specific voice
+func TokenizeWithVoice(text string, voice string) []int64 {
 	var tokens []int64
 	tokens = append(tokens, 0) // Start token
 
-	// Generate IPA phonemes using our robust subprocess phonemizer
-	phonemes, err := Phonemize(text)
+	lang := GetLanguageCode(voice)
+	if lang == "ja" {
+		text = ConvertKanjiToHiragana(text)
+	}
+
+	phonemes, err := Phonemize(text, lang)
 	if err == nil && len(phonemes) > 0 {
 		for _, p := range phonemes {
 			if id, ok := Vocab[p]; ok {

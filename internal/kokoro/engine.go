@@ -1,10 +1,13 @@
 package kokoro
 
 import (
+	"archive/zip"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,25 +47,51 @@ func (e *KokoroEngine) Initialize(modelPath string, configPath string) error {
 			}
 		}
 	}
-
 	return nil
 }
 
 func (e *KokoroEngine) Synthesize(text string, voice string, speed float32) ([]float32, int, error) {
+	matchedVoice := findVoiceMatch(voice)
+	if matchedVoice == "" {
+		matchedVoice = strings.ToLower(voice)
+	}
 
-	tokens := shared.Tokenize(text)
-	voiceData, ok := e.voices[strings.ToLower(voice)]
-	if len(voiceData) == 0 {
-		for k, vec := range e.voices {
-			if strings.Contains(k, strings.ToLower(voice)) || strings.Contains(strings.ToLower(voice), k) {
-				voiceData = vec
-				break
+	tokens := shared.TokenizeWithVoice(text, matchedVoice)
+
+	voiceData, ok := e.voices[matchedVoice]
+	if !ok || len(voiceData) == 0 {
+		voicesDir := filepath.Join(filepath.Dir(e.modelPath), "voices")
+		binPath := filepath.Join(voicesDir, matchedVoice+".bin")
+
+		if _, err := os.Stat(binPath); os.IsNotExist(err) {
+			if KokoroVoices[matchedVoice] {
+				fmt.Printf("[Kokoro] Voice '%s' not found locally. Fetching on-demand...\n", matchedVoice)
+				if err := downloadAndExtractVoice(voicesDir, matchedVoice); err != nil {
+					fmt.Printf("[Kokoro] Error fetching voice '%s': %v\n", matchedVoice, err)
+				}
 			}
 		}
-		if len(voiceData) == 0 {
-			for _, vec := range e.voices {
+
+		if _, err := os.Stat(binPath); err == nil {
+			vec, err := loadVoiceVector(binPath)
+			if err == nil {
+				e.voices[matchedVoice] = vec
 				voiceData = vec
-				break
+			}
+		}
+
+		if len(voiceData) == 0 {
+			for k, vec := range e.voices {
+				if strings.Contains(k, matchedVoice) || strings.Contains(matchedVoice, k) {
+					voiceData = vec
+					break
+				}
+			}
+			if len(voiceData) == 0 {
+				for _, vec := range e.voices {
+					voiceData = vec
+					break
+				}
 			}
 		}
 	}
@@ -187,4 +216,106 @@ func loadVoiceVector(path string) ([]float32, error) {
 		return vec, nil
 	}
 	return nil, fmt.Errorf("invalid voice style file size/format")
+}
+
+var KokoroVoices = map[string]bool{
+	"af_alloy": true, "af_aoede": true, "af_bella": true, "af_heart": true,
+	"af_jessica": true, "af_kore": true, "af_nicole": true, "af_nova": true,
+	"af_river": true, "af_sarah": true, "af_sky": true, "am_adam": true,
+	"am_echo": true, "am_eric": true, "am_fenrir": true, "am_liam": true,
+	"am_michael": true, "am_onyx": true, "am_puck": true, "am_santa": true,
+	"bf_alice": true, "bf_emma": true, "bf_isabella": true, "bf_lily": true,
+	"bm_daniel": true, "bm_fable": true, "bm_george": true, "bm_lewis": true,
+	"ef_dora": true, "em_alex": true, "em_santa": true, "ff_siwis": true,
+	"hf_alpha": true, "hf_beta": true, "hm_omega": true, "hm_psi": true,
+	"if_sara": true, "im_nicola": true, "jf_alpha": true, "jf_gongitsune": true,
+	"jf_nezumi": true, "jf_tebukuro": true, "jm_kumo": true, "pf_dora": true,
+	"pm_alex": true, "pm_santa": true, "zf_xiaobei": true, "zf_xiaoni": true,
+	"zf_xiaoxiao": true, "zf_xiaoyi": true, "zm_yunjian": true, "zm_yunxi": true,
+	"zm_yunxia": true, "zm_yunyang": true,
+}
+
+func findVoiceMatch(voice string) string {
+	voiceLower := strings.ToLower(voice)
+	if voiceLower == "" {
+		return ""
+	}
+	if KokoroVoices[voiceLower] {
+		return voiceLower
+	}
+	for kv := range KokoroVoices {
+		if strings.Contains(kv, voiceLower) {
+			return kv
+		}
+	}
+	return ""
+}
+
+func downloadAndExtractVoice(voicesDir string, voiceName string) error {
+	ptPath := filepath.Join(voicesDir, voiceName+".pt")
+	binPath := filepath.Join(voicesDir, voiceName+".bin")
+
+	if err := os.MkdirAll(voicesDir, 0755); err != nil {
+		return err
+	}
+
+	url := fmt.Sprintf("https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/%s.pt", voiceName)
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("bad status code: %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(ptPath)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(out, resp.Body)
+	out.Close()
+	if err != nil {
+		os.Remove(ptPath)
+		return err
+	}
+
+	r, err := zip.OpenReader(ptPath)
+	if err != nil {
+		os.Remove(ptPath)
+		return err
+	}
+	defer r.Close()
+
+	var dataFile *zip.File
+	for _, f := range r.File {
+		if strings.HasSuffix(f.Name, "/data/0") {
+			dataFile = f
+			break
+		}
+	}
+
+	if dataFile == nil {
+		os.Remove(ptPath)
+		return fmt.Errorf("could not find tensor data in pt file")
+	}
+
+	rc, err := dataFile.Open()
+	if err != nil {
+		os.Remove(ptPath)
+		return err
+	}
+	defer rc.Close()
+
+	binOut, err := os.Create(binPath)
+	if err != nil {
+		os.Remove(ptPath)
+		return err
+	}
+	_, err = io.Copy(binOut, rc)
+	binOut.Close()
+	
+	os.Remove(ptPath)
+	return nil
 }
