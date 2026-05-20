@@ -171,8 +171,8 @@ func LoadRegistry() {
 	kokoroEntry.Language.NameEnglish = "English (Kokoro Realism)"
 	kokoroEntry.Quality = "high"
 	kokoroEntry.Files = map[string]interface{}{
-		"kokoro-v0.19.onnx": nil,
-		"config.json":       nil,
+		"kokoro-v1.0.onnx": nil,
+		"config.json":      nil,
 	}
 	Registry["kokoro-v1.0"] = kokoroEntry
 
@@ -222,8 +222,8 @@ func getModelPaths(key string) (string, string) {
 
 	var localOnnx, localConf string
 	if strings.HasPrefix(key, "kokoro") {
-		localOnnx = filepath.Join(ModelDir, "kokoro", "kokoro-v0.19.onnx")
-		localConf = filepath.Join(ModelDir, "kokoro", "kokoro-v0.19.json")
+		localOnnx = filepath.Join(ModelDir, "kokoro", "kokoro-v1.0.onnx")
+		localConf = filepath.Join(ModelDir, "kokoro", "kokoro-v1.0.json")
 		os.MkdirAll(filepath.Join(ModelDir, "kokoro"), 0755)
 	} else if strings.HasPrefix(key, "kitten") {
 		localOnnx = filepath.Join(ModelDir, "kitten", key+".onnx")

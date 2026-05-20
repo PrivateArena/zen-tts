@@ -141,15 +141,15 @@ func (e *KokoroEngine) Synthesize(text string, voice string, speed float32) ([]f
 	var hasSpeed bool = true
 	// Initialize dynamic advanced session
 	session, err := ort.NewDynamicAdvancedSession(e.modelPath,
-		[]string{"input_ids", "style", "speed"},
-		[]string{"waveform"},
+		[]string{"tokens", "style", "speed"},
+		[]string{"audio"},
 		nil)
 	if err != nil {
 		hasSpeed = false
-		// Fallback to "input_ids", "style" only
+		// Fallback to "tokens", "style" only
 		session, err = ort.NewDynamicAdvancedSession(e.modelPath,
-			[]string{"input_ids", "style"},
-			[]string{"waveform"},
+			[]string{"tokens", "style"},
+			[]string{"audio"},
 			nil)
 	}
 
