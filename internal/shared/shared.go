@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,206 @@ import (
 	"github.com/ikawaha/kagome-dict/ipa"
 	"github.com/ikawaha/kagome/v2/tokenizer"
 )
+
+// WordTiming holds the time span for a single word, relative to the segment start.
+type WordTiming struct {
+	Word  string  `json:"word"`
+	Start float64 `json:"start"` // seconds from segment start
+	End   float64 `json:"end"`   // seconds from segment start
+}
+
+// WordBoundary records how many phoneme tokens correspond to each source word.
+type WordBoundary struct {
+	Word       string
+	TokenCount int // number of ONNX tokens (excluding BOS/EOS) produced for this word
+}
+
+// TokenizeWordBoundaries tokenizes each word individually and returns per-word
+// token counts. This allows PCM-level silence detection to be aligned to words.
+// The total token sequence produced here matches TokenizeWithVoice(fullText, voice)
+// when words are joined with a single space.
+func TokenizeWordBoundaries(text string, voice string) []WordBoundary {
+	words := strings.Fields(text)
+	lang := GetLanguageCode(voice)
+	boundaries := make([]WordBoundary, 0, len(words))
+
+	for _, word := range words {
+		tokens := tokenizeWord(word, lang)
+		boundaries = append(boundaries, WordBoundary{
+			Word:       word,
+			TokenCount: len(tokens),
+		})
+	}
+	return boundaries
+}
+
+// tokenizeWord phonemizes a single word and maps to vocab IDs (no BOS/EOS).
+func tokenizeWord(word string, lang string) []int64 {
+	phonemes, err := Phonemize(word, lang)
+	var tokens []int64
+	if err == nil && len(phonemes) > 0 {
+		for _, p := range phonemes {
+			if id, ok := Vocab[p]; ok {
+				tokens = append(tokens, id)
+			} else {
+				for _, r := range p {
+					if id, ok := Vocab[string(r)]; ok {
+						tokens = append(tokens, id)
+					}
+				}
+			}
+		}
+	} else {
+		for _, r := range strings.ToLower(word) {
+			if id, ok := Vocab[string(r)]; ok {
+				tokens = append(tokens, id)
+			}
+		}
+	}
+	return tokens
+}
+
+// SilenceBoundaryTimings derives per-word timings from raw PCM float32 samples
+// using energy-envelope silence detection. It is the production fallback when
+// the ONNX model does not expose a "durations" tensor.
+//
+// Algorithm:
+//  1. Compute RMS energy in small windows (windowSamples).
+//  2. Find silence gaps (energy < silenceThreshold) between words.
+//  3. Map silence boundaries back to words using tokenCount proportions as weights
+//     when a clear silence gap can't be found.
+func SilenceBoundaryTimings(samples []float32, sampleRate int, boundaries []WordBoundary) []WordTiming {
+	if len(samples) == 0 || len(boundaries) == 0 {
+		return nil
+	}
+
+	totalDuration := float64(len(samples)) / float64(sampleRate)
+
+	// Silence detection parameters
+	const windowMs = 20   // RMS window size in milliseconds
+	const silenceDB = -35 // threshold in dB below peak
+
+	windowSamples := sampleRate * windowMs / 1000
+	if windowSamples < 1 {
+		windowSamples = 1
+	}
+
+	// Compute per-window RMS
+	numWindows := (len(samples) + windowSamples - 1) / windowSamples
+	rmsValues := make([]float64, numWindows)
+	peakRMS := 0.0
+	for i := 0; i < numWindows; i++ {
+		start := i * windowSamples
+		end := start + windowSamples
+		if end > len(samples) {
+			end = len(samples)
+		}
+		var sumSq float64
+		for _, s := range samples[start:end] {
+			sumSq += float64(s) * float64(s)
+		}
+		rms := math.Sqrt(sumSq / float64(end-start))
+		rmsValues[i] = rms
+		if rms > peakRMS {
+			peakRMS = rms
+		}
+	}
+
+	// Derive absolute silence threshold from peak
+	silenceLinear := peakRMS * math.Pow(10.0, float64(silenceDB)/20.0)
+
+	// Mark silence windows
+	isSilent := make([]bool, numWindows)
+	for i, rms := range rmsValues {
+		isSilent[i] = rms <= silenceLinear
+	}
+
+	windowDur := float64(windowSamples) / float64(sampleRate)
+
+	// Find silence gap centers between each pair of adjacent words.
+	// We need (len(boundaries)-1) gap positions.
+	numGaps := len(boundaries) - 1
+	gapCenters := make([]float64, numGaps)
+
+	// Compute total token counts for proportional fallback
+	totalTokens := 0
+	for _, b := range boundaries {
+		totalTokens += b.TokenCount
+	}
+
+	// For each gap, search for a silence window near the expected proportional position
+	cumTokens := 0
+	for g := 0; g < numGaps; g++ {
+		cumTokens += boundaries[g].TokenCount
+		propFrac := float64(cumTokens) / float64(totalTokens)
+		expectedTime := propFrac * totalDuration
+		expectedWin := int(expectedTime / windowDur)
+
+		// Search ±15% of totalDuration around expected position
+		searchRadius := int(0.15 * totalDuration / windowDur)
+		if searchRadius < 3 {
+			searchRadius = 3
+		}
+		lo := expectedWin - searchRadius
+		hi := expectedWin + searchRadius
+		if lo < 0 {
+			lo = 0
+		}
+		if hi >= numWindows {
+			hi = numWindows - 1
+		}
+
+		// Find the longest silence run in [lo,hi]
+		bestCenter := -1
+		bestLen := 0
+		i := lo
+		for i <= hi {
+			if isSilent[i] {
+				j := i
+				for j <= hi && isSilent[j] {
+					j++
+				}
+				runLen := j - i
+				if runLen > bestLen {
+					bestLen = runLen
+					bestCenter = i + runLen/2
+				}
+				i = j
+			} else {
+				i++
+			}
+		}
+
+		if bestCenter >= 0 {
+			gapCenters[g] = float64(bestCenter) * windowDur
+		} else {
+			// Fallback: use proportional position
+			gapCenters[g] = expectedTime
+		}
+	}
+
+	// Build timings from gap centers
+	timings := make([]WordTiming, len(boundaries))
+	currentStart := 0.0
+	for i, b := range boundaries {
+		var end float64
+		if i < numGaps {
+			end = gapCenters[i]
+		} else {
+			end = totalDuration
+		}
+		if end <= currentStart {
+			end = currentStart + (totalDuration / float64(len(boundaries)))
+		}
+		timings[i] = WordTiming{
+			Word:  b.Word,
+			Start: currentStart,
+			End:   end,
+		}
+		currentStart = end
+	}
+	return timings
+}
 
 var (
 	ortInitOnce sync.Once

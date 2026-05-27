@@ -200,6 +200,29 @@ func (e *KokoroEngine) Close() error {
 	return nil
 }
 
+// SynthesizeWithTimings implements TimingEngine. It synthesizes audio and then
+// derives per-word timestamps by analyzing silence boundaries in the PCM output.
+// Timings are relative to segment start (start at 0.0).
+func (e *KokoroEngine) SynthesizeWithTimings(text, voice string, speed float32) ([]float32, []shared.WordTiming, int, error) {
+	samples, sampleRate, err := e.Synthesize(text, voice, speed)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	matchedVoice := findVoiceMatch(voice)
+	if matchedVoice == "" {
+		matchedVoice = strings.ToLower(voice)
+	}
+
+	boundaries := shared.TokenizeWordBoundaries(text, matchedVoice)
+	if len(boundaries) == 0 {
+		return samples, nil, sampleRate, nil
+	}
+
+	timings := shared.SilenceBoundaryTimings(samples, sampleRate, boundaries)
+	return samples, timings, sampleRate, nil
+}
+
 func loadVoiceVector(path string) ([]float32, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

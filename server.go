@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -187,6 +188,36 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Write([]byte(`{"status":"playing"}`))
+		return
+	}
+
+	// ?timestamps=1 — return JSON envelope with base64 WAV + word timings
+	if r.URL.Query().Get("timestamps") == "1" {
+		var wavBuf []byte
+		wavBuf = append(wavBuf, makeWavHeader(sampleRate, len(audioData))...)
+		wavBuf = append(wavBuf, audioData...)
+
+		type timingPayload struct {
+			Audio    string      `json:"audio"`
+			Timings  interface{} `json:"timings"`
+			Duration float64     `json:"duration"`
+		}
+		payload := timingPayload{
+			Audio:    base64.StdEncoding.EncodeToString(wavBuf),
+			Duration: audioDuration,
+		}
+
+		// Use TimingEngine if the active synth supports it
+		if te, ok := synth.(TimingEngine); ok {
+			_, timings, _, terr := te.SynthesizeWithTimings(text, req.Voice, float32(userSpeed))
+			if terr == nil {
+				payload.Timings = timings
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		json.NewEncoder(w).Encode(payload)
 		return
 	}
 
