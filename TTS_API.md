@@ -74,15 +74,17 @@ Depending on the engine model you booted the server with (`-m` flag), use the co
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!", "voice": "af_bella", "speed": 1.0}' \
-  http://127.0.0.1:5000/tts \
+  http://127.0.0.1:5055/tts \
   -o output.wav
 ```
+
+**Tips**: Use /tts?play=true for streaming
 
 ### 2. Python
 ```python
 import requests
 
-url = "http://127.0.0.1:5000/tts"
+url = "http://127.0.0.1:5055/tts"
 payload = {
     "text": "Hello, this is a python client request.",
     "voice": "af_bella",
@@ -108,7 +110,7 @@ const payload = {
   speed: 1.0
 };
 
-fetch('http://127.0.0.1:5000/tts', {
+fetch('http://127.0.0.1:5055/tts', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(payload)
@@ -150,7 +152,7 @@ func main() {
 	}
 	jsonData, _ := json.Marshal(reqBody)
 
-	resp, err := http.Post("http://127.0.0.1:5000/tts", "application/json", bytes.NewBuffer(jsonData))
+	resp, err := http.Post("http://127.0.0.1:5055/tts", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		panic(err)
 	}
