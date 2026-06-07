@@ -15,13 +15,26 @@ import (
 
 // --- DATA STRUCTURES ---
 
+type EngineConfig struct {
+	Model      string  `json:"model"`
+	Voice      string  `json:"voice,omitempty"`
+	Speed      float64 `json:"speed,omitempty"`
+	ModelPath  string  `json:"model_path,omitempty"`
+	ConfigPath string  `json:"config_path,omitempty"`
+}
+
+type ReplacementRule struct {
+	Pattern     string `json:"pattern"`
+	Replacement string `json:"replacement"`
+	IsRegex     bool   `json:"is_regex"`
+}
+
 type Config struct {
-	LastModel  string  `json:"last_model"`
-	Port       int     `json:"port"`
-	EngineType string  `json:"engine_type"`
-	Voice      string  `json:"voice"`
-	Speed      float64 `json:"speed"`
-	SampleRate int     `json:"sample_rate"`
+	LastModel    string                  `json:"last_model"`
+	Port         int                     `json:"port"`
+	ActiveEngine string                  `json:"active_engine"`
+	Engines      map[string]EngineConfig `json:"engines"`
+	Replacements []ReplacementRule       `json:"replacements,omitempty"`
 }
 
 type VoiceRegistryEntry struct {
@@ -42,6 +55,7 @@ type TTSRequest struct {
 	Speed  float64 `json:"speed"`
 	Play   bool    `json:"play"`
 	Stream bool    `json:"stream"`
+	Engine string  `json:"engine"`
 }
 
 // --- GLOBAL STATE ---
@@ -66,17 +80,51 @@ type RegexRule struct {
 func LoadConfig() {
 	// Defaults
 	CurrentConfig = Config{
-		Port:       5055,
-		LastModel:  "en_US-amy-low",
-		EngineType: "piper",
-		Voice:      "",
-		Speed:      1.0,
-		SampleRate: 0,
+		LastModel:    "en_US-amy-low",
+		Port:         5055,
+		ActiveEngine: "piper",
+		Engines: map[string]EngineConfig{
+			"piper": {
+				Model: "en_US-amy-low",
+				Speed: 1.0,
+			},
+			"kokoro": {
+				Model: "kokoro-v1.0",
+				Voice: "af_bella",
+				Speed: 1.0,
+			},
+			"kitten": {
+				Model: "kitten-tts-mini",
+				Voice: "luna",
+				Speed: 1.0,
+			},
+		},
 	}
 
 	file, err := os.ReadFile(ConfigFile)
 	if err == nil {
 		json.Unmarshal(file, &CurrentConfig)
+	}
+
+	// Ensure the Engines map exists and is populated
+	if CurrentConfig.Engines == nil {
+		CurrentConfig.Engines = make(map[string]EngineConfig)
+	}
+	for _, engineType := range []string{"piper", "kokoro", "kitten"} {
+		if _, ok := CurrentConfig.Engines[engineType]; !ok {
+			if engineType == "piper" {
+				CurrentConfig.Engines[engineType] = EngineConfig{Model: "en_US-amy-low", Speed: 1.0}
+			} else if engineType == "kokoro" {
+				CurrentConfig.Engines[engineType] = EngineConfig{Model: "kokoro-v1.0", Voice: "af_bella", Speed: 1.0}
+			} else if engineType == "kitten" {
+				CurrentConfig.Engines[engineType] = EngineConfig{Model: "kitten-tts-mini", Voice: "luna", Speed: 1.0}
+			}
+		}
+	}
+
+	// Make sure active engine is valid
+	if CurrentConfig.ActiveEngine == "" {
+		CurrentConfig.ActiveEngine = "piper"
 	}
 
 	LoadReplacements()
@@ -94,59 +142,76 @@ func LoadReplacements() {
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
 
-	data, err := os.ReadFile(ReplacementsFile)
-	if err != nil {
-		// Create empty file if not exists
-		os.WriteFile(ReplacementsFile, []byte(""), 0644)
-		return
-	}
-
-	lines := strings.Split(string(data), "\n")
 	var plainPairs []string
 	var regexes []RegexRule
 	var rawLines []string
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		rawLines = append(rawLines, line)
-
-		parts := strings.Split(line, "::")
-		if len(parts) < 2 {
-			continue
-		}
-
-		pattern := parts[0]
-		var guard, replacement string
-
-		if len(parts) == 3 {
-			guard = strings.ToLower(parts[1])
-			replacement = strings.ReplaceAll(parts[2], "\\n", "\n")
-		} else {
-			replacement = strings.ReplaceAll(parts[1], "\\n", "\n")
-		}
-
-		if strings.HasPrefix(pattern, "re:") {
-			cleanPat := strings.TrimPrefix(pattern, "re:")
-			re, err := regexp.Compile("(?i)" + cleanPat)
-			if err == nil {
-				regexes = append(regexes, RegexRule{Re: re, Replacement: replacement, Guard: guard})
+	// 1. Read replacements.txt if exists
+	data, err := os.ReadFile(ReplacementsFile)
+	if err == nil {
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
 			}
-		} else if strings.HasPrefix(pattern, "ci:") {
-			cleanPat := strings.TrimPrefix(pattern, "ci:")
-			re, err := regexp.Compile("(?i)" + regexp.QuoteMeta(cleanPat))
-			if err == nil {
-				// For ci: rules, the guard is just the lowercased pattern itself if not provided
-				if guard == "" {
-					guard = strings.ToLower(cleanPat)
+			rawLines = append(rawLines, line)
+
+			parts := strings.Split(line, "::")
+			if len(parts) < 2 {
+				continue
+			}
+
+			pattern := parts[0]
+			var guard, replacement string
+
+			if len(parts) == 3 {
+				guard = strings.ToLower(parts[1])
+				replacement = strings.ReplaceAll(parts[2], "\\n", "\n")
+			} else {
+				replacement = strings.ReplaceAll(parts[1], "\\n", "\n")
+			}
+
+			if strings.HasPrefix(pattern, "re:") {
+				cleanPat := strings.TrimPrefix(pattern, "re:")
+				re, err := regexp.Compile("(?i)" + cleanPat)
+				if err == nil {
+					regexes = append(regexes, RegexRule{Re: re, Replacement: replacement, Guard: guard})
 				}
-				regexes = append(regexes, RegexRule{Re: re, Replacement: replacement, Guard: guard})
+			} else if strings.HasPrefix(pattern, "ci:") {
+				cleanPat := strings.TrimPrefix(pattern, "ci:")
+				re, err := regexp.Compile("(?i)" + regexp.QuoteMeta(cleanPat))
+				if err == nil {
+					if guard == "" {
+						guard = strings.ToLower(cleanPat)
+					}
+					regexes = append(regexes, RegexRule{Re: re, Replacement: replacement, Guard: guard})
+				}
+			} else {
+				plainPairs = append(plainPairs, pattern, replacement)
+			}
+		}
+	} else {
+		// Create empty replacements.txt if not exists
+		os.WriteFile(ReplacementsFile, []byte(""), 0644)
+	}
+
+	// 2. Read config.json replacements
+	for _, rule := range CurrentConfig.Replacements {
+		if rule.IsRegex {
+			re, err := regexp.Compile("(?i)" + rule.Pattern)
+			if err == nil {
+				regexes = append(regexes, RegexRule{Re: re, Replacement: rule.Replacement})
 			}
 		} else {
-			plainPairs = append(plainPairs, pattern, replacement)
+			plainPairs = append(plainPairs, rule.Pattern, rule.Replacement)
 		}
+		// Form a raw rule representation for the UI table
+		rawRuleLine := rule.Pattern + "::" + rule.Replacement
+		if rule.IsRegex {
+			rawRuleLine = "re:" + rawRuleLine
+		}
+		rawLines = append(rawLines, rawRuleLine)
 	}
 
 	PlainReplacer = strings.NewReplacer(plainPairs...)

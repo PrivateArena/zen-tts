@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strings"
 )
 
 var DebugMode bool
@@ -34,6 +35,13 @@ func main() {
 	}
 	if *modelPtr != "" {
 		CurrentConfig.LastModel = *modelPtr
+		if strings.HasPrefix(*modelPtr, "kokoro") {
+			CurrentConfig.ActiveEngine = "kokoro"
+		} else if strings.HasPrefix(*modelPtr, "kitten") {
+			CurrentConfig.ActiveEngine = "kitten"
+		} else {
+			CurrentConfig.ActiveEngine = "piper"
+		}
 	}
 
 	// Verify dependencies directory exists

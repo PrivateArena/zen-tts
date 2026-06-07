@@ -25,29 +25,47 @@ var (
 
 // --- SERVER CONTROL ---
 
-func StartServer(modelName string, port int, cpuCore int) {
-	serverMu.Lock()
-	defer serverMu.Unlock()
+// SwitchEngine loads and initializes the requested engine and model, closing the old one.
+// Thread-safe and safe to call on-the-fly while requests are being processed.
+func SwitchEngine(engineType string, modelName string) error {
+	activeSynthMu.Lock()
+	defer activeSynthMu.Unlock()
 
-	if ServerActive {
-		return
+	ConfigMu.RLock()
+	currEngine := CurrentConfig.ActiveEngine
+	currModel := CurrentConfig.LastModel
+	ConfigMu.RUnlock()
+
+	// If the requested engine/model is already active, do nothing
+	if activeSynth != nil && currEngine == engineType && currModel == modelName {
+		return nil
 	}
 
-	LogMsg(fmt.Sprintf("[yellow]Initializing engine for %s...[-]", modelName))
+	LogMsg(fmt.Sprintf("[yellow]Switching engine to %s (%s)...[-]", engineType, modelName))
 
-	onnxPath, configPath := getModelPaths(modelName)
+	var onnxPath, configPath string
+	ConfigMu.RLock()
+	engCfg, hasEngCfg := CurrentConfig.Engines[engineType]
+	ConfigMu.RUnlock()
+
+	if hasEngCfg && engCfg.ModelPath != "" && engCfg.ConfigPath != "" {
+		onnxPath = engCfg.ModelPath
+		configPath = engCfg.ConfigPath
+	} else {
+		onnxPath, configPath = getModelPaths(modelName)
+	}
+
 	if onnxPath == "" {
-		LogMsg("[red]Failed to find model files[-]")
-		return
+		return fmt.Errorf("failed to find model files for model: %s", modelName)
 	}
 
 	var engine TTSEngine
 	var err error
 
-	if strings.HasPrefix(modelName, "kokoro") {
+	if engineType == "kokoro" {
 		engine = &kokoro.KokoroEngine{}
 		err = engine.Initialize(onnxPath, configPath)
-	} else if strings.HasPrefix(modelName, "kitten") {
+	} else if engineType == "kitten" {
 		engine = &kitten.KittenEngine{}
 		err = engine.Initialize(onnxPath, configPath)
 	} else {
@@ -56,18 +74,75 @@ func StartServer(modelName string, port int, cpuCore int) {
 	}
 
 	if err != nil {
-		LogMsg(fmt.Sprintf("[red]Engine Initialization Error: %v[-]", err))
-		return
+		return fmt.Errorf("engine initialization failed: %v", err)
 	}
 
-	activeSynthMu.Lock()
 	if activeSynth != nil {
 		activeSynth.Close()
 	}
 	activeSynth = engine
-	activeSynthMu.Unlock()
-
 	ActiveModel = modelName
+
+	ConfigMu.Lock()
+	CurrentConfig.ActiveEngine = engineType
+	CurrentConfig.LastModel = modelName
+	if cfg, ok := CurrentConfig.Engines[engineType]; ok {
+		cfg.Model = modelName
+		CurrentConfig.Engines[engineType] = cfg
+	}
+	ConfigMu.Unlock()
+	SaveConfig()
+
+	LogMsg(fmt.Sprintf("[green]Engine successfully switched to %s (%s)[-]", engineType, modelName))
+	return nil
+}
+
+// --- SERVER CONTROL ---
+
+func StartServer(modelName string, port int, cpuCore int) {
+	serverMu.Lock()
+	defer serverMu.Unlock()
+
+	if ServerActive {
+		return
+	}
+
+	ConfigMu.RLock()
+	activeEngine := CurrentConfig.ActiveEngine
+	engCfg, hasEngCfg := CurrentConfig.Engines[activeEngine]
+	ConfigMu.RUnlock()
+
+	// Check compatibility between the active engine and the requested model name
+	compatible := false
+	if activeEngine == "kokoro" && strings.HasPrefix(modelName, "kokoro") {
+		compatible = true
+	} else if activeEngine == "kitten" && strings.HasPrefix(modelName, "kitten") {
+		compatible = true
+	} else if activeEngine == "piper" && !strings.HasPrefix(modelName, "kokoro") && !strings.HasPrefix(modelName, "kitten") {
+		compatible = true
+	}
+
+	// If they are not compatible (e.g. user changed active_engine in config.json manually
+	// but didn't update last_model), default to the active engine's configured model.
+	if !compatible && hasEngCfg && engCfg.Model != "" {
+		modelName = engCfg.Model
+	}
+
+	var engineType string
+	if strings.HasPrefix(modelName, "kokoro") {
+		engineType = "kokoro"
+	} else if strings.HasPrefix(modelName, "kitten") {
+		engineType = "kitten"
+	} else {
+		engineType = "piper"
+	}
+
+	err := SwitchEngine(engineType, modelName)
+	if err != nil {
+		LogMsg(fmt.Sprintf("[red]Engine Initialization Error: %v[-]", err))
+		return
+	}
+
 	ServerPort = port
 
 	mux := http.NewServeMux()
@@ -82,7 +157,7 @@ func StartServer(modelName string, port int, cpuCore int) {
 	serverSrv = &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux}
 
 	go func() {
-		LogMsg(fmt.Sprintf("[green]Server started on :%d using %s[-]", port, modelName))
+		LogMsg(fmt.Sprintf("[green]Server started on :%d[-]", port))
 		if err := serverSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			LogMsg(fmt.Sprintf("[red]Server Error: %v[-]", err))
 			ServerActive = false
@@ -148,12 +223,57 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userSpeed := req.Speed
-	if userSpeed <= 0 {
-		userSpeed = 1.0
+	ConfigMu.RLock()
+	activeEngine := CurrentConfig.ActiveEngine
+	ConfigMu.RUnlock()
+
+	// Detect requested engine from voice or engine field
+	targetEngine := activeEngine
+	if req.Engine != "" {
+		targetEngine = strings.ToLower(req.Engine)
+	} else if strings.HasPrefix(req.Voice, "kokoro") {
+		targetEngine = "kokoro"
+	} else if strings.HasPrefix(req.Voice, "kitten") {
+		targetEngine = "kitten"
+	} else if req.Voice != "" {
+		if kokoro.KokoroVoices[strings.ToLower(req.Voice)] {
+			targetEngine = "kokoro"
+		}
 	}
 
-	LogMsg(fmt.Sprintf("Processing %d chars | Speed: %.1fx | Voice: %s", len(text), userSpeed, req.Voice))
+	if targetEngine != activeEngine && (targetEngine == "piper" || targetEngine == "kokoro" || targetEngine == "kitten") {
+		ConfigMu.RLock()
+		targetModel := CurrentConfig.Engines[targetEngine].Model
+		ConfigMu.RUnlock()
+		err := SwitchEngine(targetEngine, targetModel)
+		if err != nil {
+			LogMsg(fmt.Sprintf("[red]Failed to switch engine to %s: %v[-]", targetEngine, err))
+			http.Error(w, "Engine switch failed", 500)
+			return
+		}
+		activeEngine = targetEngine
+	}
+
+	reqVoice := req.Voice
+	userSpeed := req.Speed
+
+	ConfigMu.RLock()
+	engCfg, hasEngCfg := CurrentConfig.Engines[activeEngine]
+	ConfigMu.RUnlock()
+
+	if reqVoice == "" && hasEngCfg {
+		reqVoice = engCfg.Voice
+	}
+
+	if userSpeed <= 0 {
+		if hasEngCfg && engCfg.Speed > 0 {
+			userSpeed = engCfg.Speed
+		} else {
+			userSpeed = 1.0
+		}
+	}
+
+	LogMsg(fmt.Sprintf("Processing %d chars | Speed: %.1fx | Voice: %s | Engine: %s", len(text), userSpeed, reqVoice, activeEngine))
 
 	activeSynthMu.Lock()
 	synth := activeSynth
@@ -216,11 +336,11 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 
 		var err error
 		if streamEngine, ok := synth.(StreamingEngine); ok {
-			err = streamEngine.SynthesizeStream(text, req.Voice, float32(userSpeed), callback)
+			err = streamEngine.SynthesizeStream(text, reqVoice, float32(userSpeed), callback)
 		} else {
 			// Fallback: run full synthesis and stream it in one chunk
 			var samples []float32
-			samples, _, err = synth.Synthesize(text, req.Voice, float32(userSpeed))
+			samples, _, err = synth.Synthesize(text, reqVoice, float32(userSpeed))
 			if err == nil {
 				callback(samples)
 			}
@@ -234,7 +354,7 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Synthesize using decoupled engine
 	startTime := time.Now()
-	samples, sampleRate, err := synth.Synthesize(text, req.Voice, float32(userSpeed))
+	samples, sampleRate, err := synth.Synthesize(text, reqVoice, float32(userSpeed))
 	processTime := time.Since(startTime)
 	if err != nil {
 		LogMsg(fmt.Sprintf("[red]Synthesize Error: %v[-]", err))
@@ -279,7 +399,7 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Use TimingEngine if the active synth supports it
 		if te, ok := synth.(TimingEngine); ok {
-			_, timings, _, terr := te.SynthesizeWithTimings(text, req.Voice, float32(userSpeed))
+			_, timings, _, terr := te.SynthesizeWithTimings(text, reqVoice, float32(userSpeed))
 			if terr == nil {
 				payload.Timings = timings
 			}

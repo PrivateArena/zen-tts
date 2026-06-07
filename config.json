@@ -1,6 +1,23 @@
 {
   "last_model": "en_US-ryan-medium",
   "port": 5055,
+  "active_engine": "piper",
+  "engines": {
+    "kitten": {
+      "model": "kitten-tts-mini",
+      "voice": "luna",
+      "speed": 1
+    },
+    "kokoro": {
+      "model": "kokoro-v1.0",
+      "voice": "af_bella",
+      "speed": 1
+    },
+    "piper": {
+      "model": "en_US-ryan-medium",
+      "speed": 1
+    }
+  },
   "replacements": [
     {
       "pattern": "Kee{3,}",

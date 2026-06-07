@@ -76,8 +76,8 @@ func buildDashboard() *tview.Flex {
 					if ServerActive {
 						status = fmt.Sprintf("[green]RUNNING (:%d)[-]", ServerPort)
 					}
-					txt := fmt.Sprintf("\n  Server: %s\n  Voice:  [#5f87af]%s[-]\n  Port:   %d\n\n  [gray]Use Sidebar to Control[-]", 
-						status, CurrentConfig.LastModel, CurrentConfig.Port)
+					txt := fmt.Sprintf("\n  Server: %s\n  Engine: [#5f87af]%s[-]\n  Voice:  [#5f87af]%s[-]\n  Port:   %d\n\n  [gray]Use Sidebar to Control[-]", 
+						status, strings.ToUpper(CurrentConfig.ActiveEngine), CurrentConfig.LastModel, CurrentConfig.Port)
 					infoPanel.SetText(txt)
 				})
 			}
