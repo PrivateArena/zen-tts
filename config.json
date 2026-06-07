@@ -1,6 +1,6 @@
 {
   "last_model": "en_US-ryan-medium",
-  "port": 5000,
+  "port": 5055,
   "replacements": [
     {
       "pattern": "Kee{3,}",

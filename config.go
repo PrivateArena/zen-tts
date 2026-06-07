@@ -13,8 +13,6 @@ import (
 	"sync"
 )
 
-
-
 // --- DATA STRUCTURES ---
 
 type Config struct {
@@ -39,10 +37,11 @@ type VoiceRegistryEntry struct {
 type VoiceRegistry map[string]VoiceRegistryEntry
 
 type TTSRequest struct {
-	Text  string  `json:"text"`
-	Voice string  `json:"voice"`
-	Speed float64 `json:"speed"`
-	Play  bool    `json:"play"`
+	Text   string  `json:"text"`
+	Voice  string  `json:"voice"`
+	Speed  float64 `json:"speed"`
+	Play   bool    `json:"play"`
+	Stream bool    `json:"stream"`
 }
 
 // --- GLOBAL STATE ---
@@ -67,7 +66,7 @@ type RegexRule struct {
 func LoadConfig() {
 	// Defaults
 	CurrentConfig = Config{
-		Port:       5000,
+		Port:       5055,
 		LastModel:  "en_US-amy-low",
 		EngineType: "piper",
 		Voice:      "",

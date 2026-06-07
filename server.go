@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -163,6 +164,74 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ?stream=true — stream WAV audio chunks to the client as they are synthesized
+	if r.URL.Query().Get("stream") == "true" || req.Stream {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming not supported by this server/connection", 500)
+			return
+		}
+
+		sampleRate := synth.SampleRate()
+
+		w.Header().Set("Content-Type", "audio/wav")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Transfer-Encoding", "chunked")
+
+		// Write a fake large WAV header (infinite WAV) so the client plays it continuously
+		const fakeSize = 0x7f000000
+		binary.Write(w, binary.LittleEndian, []byte("RIFF"))
+		binary.Write(w, binary.LittleEndian, uint32(36+fakeSize))
+		binary.Write(w, binary.LittleEndian, []byte("WAVE"))
+		binary.Write(w, binary.LittleEndian, []byte("fmt "))
+		binary.Write(w, binary.LittleEndian, uint32(16))
+		binary.Write(w, binary.LittleEndian, uint16(1))
+		binary.Write(w, binary.LittleEndian, uint16(1))
+		binary.Write(w, binary.LittleEndian, uint32(sampleRate))
+		binary.Write(w, binary.LittleEndian, uint32(sampleRate*2))
+		binary.Write(w, binary.LittleEndian, uint16(2))
+		binary.Write(w, binary.LittleEndian, uint16(16))
+		binary.Write(w, binary.LittleEndian, []byte("data"))
+		binary.Write(w, binary.LittleEndian, uint32(fakeSize))
+		flusher.Flush()
+
+		// Helper to send PCM chunks
+		callback := func(samples []float32) bool {
+			if len(samples) == 0 {
+				return true
+			}
+			chunkData := make([]byte, 0, len(samples)*2)
+			for _, s := range samples {
+				val := int16(s * 32767.0)
+				chunkData = append(chunkData, byte(val&0xff), byte(val>>8))
+			}
+			_, err := w.Write(chunkData)
+			if err != nil {
+				// Stop synthesis if the client disconnected
+				return false
+			}
+			flusher.Flush()
+			return true
+		}
+
+		var err error
+		if streamEngine, ok := synth.(StreamingEngine); ok {
+			err = streamEngine.SynthesizeStream(text, req.Voice, float32(userSpeed), callback)
+		} else {
+			// Fallback: run full synthesis and stream it in one chunk
+			var samples []float32
+			samples, _, err = synth.Synthesize(text, req.Voice, float32(userSpeed))
+			if err == nil {
+				callback(samples)
+			}
+		}
+
+		if err != nil {
+			LogMsg(fmt.Sprintf("[red]Streaming Synthesize Error: %v[-]", err))
+		}
+		return
+	}
+
 	// Synthesize using decoupled engine
 	startTime := time.Now()
 	samples, sampleRate, err := synth.Synthesize(text, req.Voice, float32(userSpeed))
@@ -184,10 +253,11 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Query().Get("play") == "true" || req.Play {
-		playAudio(audioData, sampleRate)
+		doneChan := playAudio(audioData, sampleRate)
+		<-doneChan
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Write([]byte(`{"status":"playing"}`))
+		w.Write([]byte(`{"status":"completed"}`))
 		return
 	}
 

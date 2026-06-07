@@ -22,6 +22,9 @@ type TTSEngine interface {
 	// Synthesize converts text to raw PCM 32-bit float or 16-bit int data.
 	Synthesize(text string, voice string, speed float32) ([]float32, int, error)
 
+	// SampleRate returns the sample rate of the synthesizer engine.
+	SampleRate() int
+
 	// Close tears down CGO memory footprints and terminates runtime instances safely.
 	Close() error
 }
@@ -34,6 +37,14 @@ type TimingEngine interface {
 	// SynthesizeWithTimings returns samples plus per-word timings relative to segment start.
 	SynthesizeWithTimings(text, voice string, speed float32) ([]float32, []shared.WordTiming, int, error)
 }
+
+// StreamingEngine is an optional upgrade to TTSEngine. Engines that support
+// chunked streaming synthesis implement this interface.
+type StreamingEngine interface {
+	TTSEngine
+	SynthesizeStream(text string, voice string, speed float32, callback func(samples []float32) bool) error
+}
+
 
 func writeWavHeader(w io.Writer, sampleRate int, dataSize int) {
 	binary.Write(w, binary.LittleEndian, []byte("RIFF"))

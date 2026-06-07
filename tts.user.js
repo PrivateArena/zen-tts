@@ -99,7 +99,7 @@
         return new Promise((resolve) => {
             GM_xmlhttpRequest({
                 method: "POST",
-                url: "http://127.0.0.1:5000",
+                url: "http://127.0.0.1:5055",
                 data: JSON.stringify({ text: text, speed: currentSpeed }), // Send speed
                 headers: { "Content-Type": "application/json" },
                 responseType: "blob",

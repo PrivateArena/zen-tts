@@ -180,9 +180,24 @@ func (e *KittenEngine) Synthesize(text string, voice string, speed float32) ([]f
 	return outputData, e.sampleRate, nil
 }
 
+func (e *KittenEngine) SampleRate() int {
+	return e.sampleRate
+}
+
 func (e *KittenEngine) Close() error {
 	return nil
 }
+
+
+func (e *KittenEngine) SynthesizeStream(text string, voice string, speed float32, callback func(samples []float32) bool) error {
+	samples, _, err := e.Synthesize(text, voice, speed)
+	if err != nil {
+		return err
+	}
+	callback(samples)
+	return nil
+}
+
 
 func loadNPZVoices(npzPath string) (map[string][]float32, error) {
 	r, err := zip.OpenReader(npzPath)

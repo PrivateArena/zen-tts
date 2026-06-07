@@ -15,6 +15,7 @@ import (
 type playRequest struct {
 	data       []byte
 	sampleRate int
+	doneChan   chan struct{}
 }
 
 var (
@@ -63,6 +64,9 @@ func resampleMonoInt16(input []byte, srcRate, dstRate int) []byte {
 func audioPlaybackWorker() {
 	for req := range playChan {
 		playData(req.data, req.sampleRate)
+		if req.doneChan != nil {
+			close(req.doneChan)
+		}
 	}
 }
 
@@ -120,7 +124,7 @@ func playData(data []byte, sampleRate int) {
 	playMu.Unlock()
 }
 
-func playAudio(data []byte, sampleRate int) {
+func playAudio(data []byte, sampleRate int) chan struct{} {
 	playOnce.Do(func() {
 		playChan = make(chan playRequest, 16)
 		go audioPlaybackWorker()
@@ -136,9 +140,14 @@ func playAudio(data []byte, sampleRate int) {
 	dataCopy := make([]byte, len(data))
 	copy(dataCopy, data)
 
+	doneChan := make(chan struct{})
+
 	select {
-	case playChan <- playRequest{data: dataCopy, sampleRate: sampleRate}:
+	case playChan <- playRequest{data: dataCopy, sampleRate: sampleRate, doneChan: doneChan}:
 	default:
 		LogMsg("[yellow]Audio playback queue full, skipping...[-]")
+		close(doneChan)
 	}
+
+	return doneChan
 }

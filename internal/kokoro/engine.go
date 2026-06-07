@@ -196,9 +196,24 @@ func (e *KokoroEngine) Synthesize(text string, voice string, speed float32) ([]f
 	return outputData, e.sampleRate, nil
 }
 
+func (e *KokoroEngine) SampleRate() int {
+	return e.sampleRate
+}
+
 func (e *KokoroEngine) Close() error {
 	return nil
 }
+
+
+func (e *KokoroEngine) SynthesizeStream(text string, voice string, speed float32, callback func(samples []float32) bool) error {
+	samples, _, err := e.Synthesize(text, voice, speed)
+	if err != nil {
+		return err
+	}
+	callback(samples)
+	return nil
+}
+
 
 // SynthesizeWithTimings implements TimingEngine. It synthesizes audio and then
 // derives per-word timestamps by analyzing silence boundaries in the PCM output.
