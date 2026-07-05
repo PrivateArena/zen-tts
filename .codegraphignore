@@ -1,0 +1,5 @@
+scripts/
+tmp/
+*_test.go
+node_modules/
+.zenmcp/

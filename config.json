@@ -1,7 +1,7 @@
 {
-  "last_model": "en_US-ryan-medium",
+  "last_model": "kokoro-v1.0",
   "port": 5055,
-  "active_engine": "piper",
+  "active_engine": "kokoro",
   "engines": {
     "kitten": {
       "model": "kitten-tts-mini",
