@@ -35,7 +35,9 @@ func main() {
 	}
 	if *modelPtr != "" {
 		CurrentConfig.LastModel = *modelPtr
-		if strings.HasPrefix(*modelPtr, "kokoro") {
+		if strings.HasPrefix(*modelPtr, "inflect") {
+			CurrentConfig.ActiveEngine = "inflect"
+		} else if strings.HasPrefix(*modelPtr, "kokoro") {
 			CurrentConfig.ActiveEngine = "kokoro"
 		} else if strings.HasPrefix(*modelPtr, "kitten") {
 			CurrentConfig.ActiveEngine = "kitten"

@@ -588,7 +588,6 @@ func downloadIfNeededForInflect(dir string) {
 - [ ] Unit tests: short text, long text (multi-chunk), seed determinism, variation=0, speed bounds
 
 ### Phase 4: Integration & Polish (1–2 days)
-- [ ] TUI voice list shows "inflect (default)"
 - [ ] HTTP API docs (README) updated
 - [ ] Checksum verification for downloads
 - [ ] Benchmark: RTF, memory, latency vs Kokoro/Kitten
@@ -601,7 +600,21 @@ func downloadIfNeededForInflect(dir string) {
 ```mermaid
 sequenceDiagram
     participant Client
-    participant Server as server.go
+    participant Ser
+
+## File Tree
+```
+/
+  main.go                 # entrypoint + DebugMsg
+  server.go               # HTTP server lifecycle + /tts handler
+  engine.go               # TTSEngine/TimingEngine/StreamingEngine ifaces + WAV header
+  audio.go                # oto-based local playback + resampler
+  config.go               # JSON config, voice registry, model auto-download
+  normalizer.go           # text normalization (prosody, phrasing, repeat squashing)
+  ui.go                   # tview TUI dashboard + LogMsg
+  constants.go            # package-level constants
+  tts.user.js             # Tampermonkey userscript consuming /tts
+  internal/kver as server.go
     participant Config as config.go
     participant Switch as SwitchEngine
     participant OldEngine

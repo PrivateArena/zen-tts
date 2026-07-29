@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"zen-tts/internal/inflect"
 	"zen-tts/internal/kitten"
 	"zen-tts/internal/kokoro"
 	"zen-tts/internal/piper"
@@ -62,7 +63,10 @@ func SwitchEngine(engineType string, modelName string) error {
 	var engine TTSEngine
 	var err error
 
-	if engineType == "kokoro" {
+	if engineType == "inflect" {
+		engine = &inflect.InflectEngine{}
+		err = engine.Initialize(onnxPath, configPath)
+	} else if engineType == "kokoro" {
 		engine = &kokoro.KokoroEngine{}
 		err = engine.Initialize(onnxPath, configPath)
 	} else if engineType == "kitten" {
@@ -118,7 +122,9 @@ func StartServer(modelName string, port int, cpuCore int) {
 		compatible = true
 	} else if activeEngine == "kitten" && strings.HasPrefix(modelName, "kitten") {
 		compatible = true
-	} else if activeEngine == "piper" && !strings.HasPrefix(modelName, "kokoro") && !strings.HasPrefix(modelName, "kitten") {
+	} else if activeEngine == "inflect" && strings.HasPrefix(modelName, "inflect") {
+		compatible = true
+	} else if activeEngine == "piper" && !strings.HasPrefix(modelName, "kokoro") && !strings.HasPrefix(modelName, "kitten") && !strings.HasPrefix(modelName, "inflect") {
 		compatible = true
 	}
 
@@ -129,7 +135,9 @@ func StartServer(modelName string, port int, cpuCore int) {
 	}
 
 	var engineType string
-	if strings.HasPrefix(modelName, "kokoro") {
+	if strings.HasPrefix(modelName, "inflect") {
+		engineType = "inflect"
+	} else if strings.HasPrefix(modelName, "kokoro") {
 		engineType = "kokoro"
 	} else if strings.HasPrefix(modelName, "kitten") {
 		engineType = "kitten"
@@ -231,6 +239,8 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 	targetEngine := activeEngine
 	if req.Engine != "" {
 		targetEngine = strings.ToLower(req.Engine)
+	} else if strings.HasPrefix(req.Voice, "inflect") {
+		targetEngine = "inflect"
 	} else if strings.HasPrefix(req.Voice, "kokoro") {
 		targetEngine = "kokoro"
 	} else if strings.HasPrefix(req.Voice, "kitten") {
@@ -241,7 +251,7 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if targetEngine != activeEngine && (targetEngine == "piper" || targetEngine == "kokoro" || targetEngine == "kitten") {
+	if targetEngine != activeEngine && (targetEngine == "piper" || targetEngine == "kokoro" || targetEngine == "kitten" || targetEngine == "inflect") {
 		ConfigMu.RLock()
 		targetModel := CurrentConfig.Engines[targetEngine].Model
 		ConfigMu.RUnlock()
@@ -283,6 +293,16 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Engine not initialized", 500)
 		return
 	}
+
+	// Build extra params map for ParameterizedEngine
+	params := map[string]any{}
+	if req.Seed != nil {
+		params["seed"] = *req.Seed
+	}
+	if req.Variation != nil {
+		params["variation"] = *req.Variation
+	}
+	hasParams := len(params) > 0
 
 	// ?stream=true — stream WAV audio chunks to the client as they are synthesized
 	if r.URL.Query().Get("stream") == "true" || req.Stream {
@@ -335,7 +355,19 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var err error
-		if streamEngine, ok := synth.(StreamingEngine); ok {
+		if hasParams {
+			if pe, ok := synth.(ParameterizedEngine); ok {
+				err = pe.SynthesizeStreamWithParams(text, reqVoice, float32(userSpeed), params, callback)
+			} else if streamEngine, ok := synth.(StreamingEngine); ok {
+				err = streamEngine.SynthesizeStream(text, reqVoice, float32(userSpeed), callback)
+			} else {
+				var samples []float32
+				samples, _, err = synth.Synthesize(text, reqVoice, float32(userSpeed))
+				if err == nil {
+					callback(samples)
+				}
+			}
+		} else if streamEngine, ok := synth.(StreamingEngine); ok {
 			err = streamEngine.SynthesizeStream(text, reqVoice, float32(userSpeed), callback)
 		} else {
 			// Fallback: run full synthesis and stream it in one chunk
@@ -354,10 +386,23 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Synthesize using decoupled engine
 	startTime := time.Now()
-	samples, sampleRate, err := synth.Synthesize(text, reqVoice, float32(userSpeed))
+	var (
+		samples    []float32
+		sampleRate int
+		synthErr   error
+	)
+	if hasParams {
+		if pe, ok := synth.(ParameterizedEngine); ok {
+			samples, sampleRate, synthErr = pe.SynthesizeWithParams(text, reqVoice, float32(userSpeed), params)
+		} else {
+			samples, sampleRate, synthErr = synth.Synthesize(text, reqVoice, float32(userSpeed))
+		}
+	} else {
+		samples, sampleRate, synthErr = synth.Synthesize(text, reqVoice, float32(userSpeed))
+	}
 	processTime := time.Since(startTime)
-	if err != nil {
-		LogMsg(fmt.Sprintf("[red]Synthesize Error: %v[-]", err))
+	if synthErr != nil {
+		LogMsg(fmt.Sprintf("[red]Synthesize Error: %v[-]", synthErr))
 		http.Error(w, "Generation Failed", 500)
 		return
 	}

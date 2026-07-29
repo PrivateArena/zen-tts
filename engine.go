@@ -45,6 +45,14 @@ type StreamingEngine interface {
 	SynthesizeStream(text string, voice string, speed float32, callback func(samples []float32) bool) error
 }
 
+// ParameterizedEngine is an optional upgrade to TTSEngine for engines that accept
+// extra per-request parameters (seed, variation) beyond text/voice/speed.
+// Use type assertion at call sites: if pe, ok := synth.(ParameterizedEngine); ok { ... }
+type ParameterizedEngine interface {
+	TTSEngine
+	SynthesizeWithParams(text, voice string, speed float32, params map[string]any) ([]float32, int, error)
+	SynthesizeStreamWithParams(text, voice string, speed float32, params map[string]any, callback func([]float32) bool) error
+}
 
 func writeWavHeader(w io.Writer, sampleRate int, dataSize int) {
 	binary.Write(w, binary.LittleEndian, []byte("RIFF"))

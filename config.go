@@ -21,6 +21,7 @@ type EngineConfig struct {
 	Speed      float64 `json:"speed,omitempty"`
 	ModelPath  string  `json:"model_path,omitempty"`
 	ConfigPath string  `json:"config_path,omitempty"`
+	Variation  float64 `json:"variation,omitempty"`
 }
 
 type ReplacementRule struct {
@@ -50,12 +51,14 @@ type VoiceRegistryEntry struct {
 type VoiceRegistry map[string]VoiceRegistryEntry
 
 type TTSRequest struct {
-	Text   string  `json:"text"`
-	Voice  string  `json:"voice"`
-	Speed  float64 `json:"speed"`
-	Play   bool    `json:"play"`
-	Stream bool    `json:"stream"`
-	Engine string  `json:"engine"`
+	Text      string   `json:"text"`
+	Voice     string   `json:"voice"`
+	Speed     float64  `json:"speed"`
+	Play      bool     `json:"play"`
+	Stream    bool     `json:"stream"`
+	Engine    string   `json:"engine"`
+	Seed      *int64   `json:"seed,omitempty"`
+	Variation *float64 `json:"variation,omitempty"`
 }
 
 // --- GLOBAL STATE ---
@@ -98,6 +101,12 @@ func LoadConfig() {
 				Voice: "luna",
 				Speed: 1.0,
 			},
+			"inflect": {
+				Model:     "inflect-micro-v2",
+				Voice:     "default",
+				Speed:     1.0,
+				Variation: 0.667,
+			},
 		},
 	}
 
@@ -110,14 +119,17 @@ func LoadConfig() {
 	if CurrentConfig.Engines == nil {
 		CurrentConfig.Engines = make(map[string]EngineConfig)
 	}
-	for _, engineType := range []string{"piper", "kokoro", "kitten"} {
+	for _, engineType := range []string{"piper", "kokoro", "kitten", "inflect"} {
 		if _, ok := CurrentConfig.Engines[engineType]; !ok {
-			if engineType == "piper" {
+			switch engineType {
+			case "piper":
 				CurrentConfig.Engines[engineType] = EngineConfig{Model: "en_US-amy-low", Speed: 1.0}
-			} else if engineType == "kokoro" {
+			case "kokoro":
 				CurrentConfig.Engines[engineType] = EngineConfig{Model: "kokoro-v1.0", Voice: "af_bella", Speed: 1.0}
-			} else if engineType == "kitten" {
+			case "kitten":
 				CurrentConfig.Engines[engineType] = EngineConfig{Model: "kitten-tts-mini", Voice: "luna", Speed: 1.0}
+			case "inflect":
+				CurrentConfig.Engines[engineType] = EngineConfig{Model: "inflect-micro-v2", Voice: "default", Speed: 1.0, Variation: 0.667}
 			}
 		}
 	}
@@ -285,7 +297,12 @@ func getModelPaths(key string) (string, string) {
 	}
 
 	var localOnnx, localConf string
-	if strings.HasPrefix(key, "kokoro") {
+	if strings.HasPrefix(key, "inflect") {
+		localDir := filepath.Join(ModelDir, "inflect", key)
+		localOnnx = filepath.Join(localDir, "decode.onnx")
+		localConf = filepath.Join(localDir, "config.json")
+		os.MkdirAll(localDir, 0755)
+	} else if strings.HasPrefix(key, "kokoro") {
 		localOnnx = filepath.Join(ModelDir, "kokoro", "kokoro-v1.0.onnx")
 		localConf = filepath.Join(ModelDir, "kokoro", "kokoro-v1.0.json")
 		os.MkdirAll(filepath.Join(ModelDir, "kokoro"), 0755)
@@ -299,7 +316,14 @@ func getModelPaths(key string) (string, string) {
 		os.MkdirAll(filepath.Join(ModelDir, "piper"), 0755)
 	}
 
-	if strings.HasPrefix(key, "kokoro") {
+	if strings.HasPrefix(key, "inflect") {
+		localDir := filepath.Join(ModelDir, "inflect", key)
+		os.MkdirAll(localDir, 0755)
+		downloadIfNeeded(filepath.Join(localDir, "duration.onnx"), InflectMicroOnnxDurationURL)
+		downloadIfNeeded(filepath.Join(localDir, "decode.onnx"), InflectMicroOnnxDecodeURL)
+		downloadIfNeeded(filepath.Join(localDir, "config.json"), InflectMicroConfigURL)
+		return localDir, filepath.Join(localDir, "config.json")
+	} else if strings.HasPrefix(key, "kokoro") {
 		// Auto-download Kokoro-82M onnx community model and config
 		downloadIfNeeded(localOnnx, KokoroOnnxURL)
 		downloadIfNeeded(localConf, KokoroConfURL)

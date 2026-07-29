@@ -30,4 +30,9 @@ const (
 
 	KittenNanoOnnxURL = "https://huggingface.co/KittenML/kitten-tts-nano-0.8/resolve/main/kitten_tts_nano_v0_8.onnx"
 	KittenNanoConfURL = "https://huggingface.co/KittenML/kitten-tts-nano-0.8/resolve/main/config.json"
+
+	// Inflect-Micro-v2 ONNX
+	InflectMicroOnnxDurationURL = "https://huggingface.co/owensong/Inflect-Micro-v2-ONNX/resolve/main/onnx/duration.onnx"
+	InflectMicroOnnxDecodeURL   = "https://huggingface.co/owensong/Inflect-Micro-v2-ONNX/resolve/main/onnx/decode.onnx"
+	InflectMicroConfigURL       = "https://huggingface.co/owensong/Inflect-Micro-v2-ONNX/resolve/main/config.json"
 )
