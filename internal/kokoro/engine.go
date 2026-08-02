@@ -116,7 +116,6 @@ func (e *KokoroEngine) Synthesize(text string, voice string, speed float32) ([]f
 		return nil, e.sampleRate, fmt.Errorf("no tokens mapped from text")
 	}
 
-
 	tokensShape := ort.NewShape(1, int64(len(tokens)))
 	tokensTensor, err := ort.NewTensor(tokensShape, tokens)
 	if err != nil {
@@ -183,7 +182,7 @@ func (e *KokoroEngine) Synthesize(text string, voice string, speed float32) ([]f
 	}
 
 	outputData := outTensor.GetData()
-	
+
 	// Clean up trailing silent zeros
 	var lastNonZero int = len(outputData) - 1
 	for lastNonZero >= 0 && outputData[lastNonZero] == 0 {
@@ -204,7 +203,6 @@ func (e *KokoroEngine) Close() error {
 	return nil
 }
 
-
 func (e *KokoroEngine) SynthesizeStream(text string, voice string, speed float32, callback func(samples []float32) bool) error {
 	samples, _, err := e.Synthesize(text, voice, speed)
 	if err != nil {
@@ -213,7 +211,6 @@ func (e *KokoroEngine) SynthesizeStream(text string, voice string, speed float32
 	callback(samples)
 	return nil
 }
-
 
 // SynthesizeWithTimings implements TimingEngine. It synthesizes audio and then
 // derives per-word timestamps by analyzing silence boundaries in the PCM output.
@@ -356,7 +353,7 @@ func downloadAndExtractVoice(voicesDir string, voiceName string) error {
 	}
 	_, err = io.Copy(binOut, rc)
 	binOut.Close()
-	
+
 	os.Remove(ptPath)
 	return nil
 }

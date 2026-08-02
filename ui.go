@@ -65,7 +65,7 @@ func buildDashboard() *tview.Flex {
 
 	infoPanel := tview.NewTextView().SetDynamicColors(true)
 	infoPanel.SetBorder(true).SetTitle(" Status ")
-	
+
 	// Background Status Updater
 	go func() {
 		ticker := time.NewTicker(500 * time.Millisecond)
@@ -76,7 +76,7 @@ func buildDashboard() *tview.Flex {
 					if ServerActive {
 						status = fmt.Sprintf("[green]RUNNING (:%d)[-]", ServerPort)
 					}
-					txt := fmt.Sprintf("\n  Server: %s\n  Engine: [#5f87af]%s[-]\n  Voice:  [#5f87af]%s[-]\n  Port:   %d\n\n  [gray]Use Sidebar to Control[-]", 
+					txt := fmt.Sprintf("\n  Server: %s\n  Engine: [#5f87af]%s[-]\n  Voice:  [#5f87af]%s[-]\n  Port:   %d\n\n  [gray]Use Sidebar to Control[-]",
 						status, strings.ToUpper(CurrentConfig.ActiveEngine), CurrentConfig.LastModel, CurrentConfig.Port)
 					infoPanel.SetText(txt)
 				})
@@ -97,7 +97,7 @@ func buildVoices(pages *tview.Pages, actions *tview.List) *tview.Flex {
 	search.SetFieldBackgroundColor(ColorPanel).SetFieldTextColor(ColorText)
 
 	// Sort Data
-	type row struct { key, lang, qual string }
+	type row struct{ key, lang, qual string }
 	var rows []row
 	for k, v := range Registry {
 		rows = append(rows, row{k, v.Language.NameEnglish, v.Quality})
@@ -112,17 +112,23 @@ func buildVoices(pages *tview.Pages, actions *tview.List) *tview.Flex {
 		for i, h := range headers {
 			table.SetCell(0, i, tview.NewTableCell(fmt.Sprintf(" %s ", h)).SetTextColor(ColorFocus).SetSelectable(false))
 		}
-		
+
 		for i, r := range filtered {
 			y := i + 1
 			cQual := ColorDim
-			if r.qual == "high" { cQual = ColorSuccess }
-			if r.qual == "medium" { cQual = ColorWarn }
-			
-			prefix := " "
-			if r.key == CurrentConfig.LastModel { prefix = " ★ " }
+			if r.qual == "high" {
+				cQual = ColorSuccess
+			}
+			if r.qual == "medium" {
+				cQual = ColorWarn
+			}
 
-			table.SetCell(y, 0, tview.NewTableCell(prefix + r.lang).SetTextColor(ColorText))
+			prefix := " "
+			if r.key == CurrentConfig.LastModel {
+				prefix = " ★ "
+			}
+
+			table.SetCell(y, 0, tview.NewTableCell(prefix+r.lang).SetTextColor(ColorText))
 			table.SetCell(y, 1, tview.NewTableCell(r.key).SetTextColor(ColorFocus))
 			table.SetCell(y, 2, tview.NewTableCell(r.qual).SetTextColor(cQual))
 		}
@@ -145,7 +151,7 @@ func buildVoices(pages *tview.Pages, actions *tview.List) *tview.Flex {
 			sel := filtered[row-1]
 			CurrentConfig.LastModel = sel.key
 			SaveConfig()
-			
+
 			// FIX: Run server operations in background goroutine to avoid UI freeze
 			go func() {
 				LogMsg(fmt.Sprintf("[yellow]Switching to %s...[-]", sel.key))
@@ -155,7 +161,7 @@ func buildVoices(pages *tview.Pages, actions *tview.List) *tview.Flex {
 				}
 				StartServer(sel.key, CurrentConfig.Port, 0)
 			}()
-			
+
 			pages.SwitchToPage("Dashboard")
 			actions.SetCurrentItem(0)
 			app.SetFocus(actions)
@@ -173,7 +179,7 @@ func buildVoices(pages *tview.Pages, actions *tview.List) *tview.Flex {
 func buildRules() *tview.Flex {
 	table := tview.NewTable().SetBorders(false).SetSelectable(true, false)
 	table.SetBackgroundColor(ColorBg)
-	
+
 	refresh := func() {
 		table.Clear()
 		table.SetCell(0, 0, tview.NewTableCell(" Type ").SetTextColor(ColorFocus).SetSelectable(false))
@@ -183,7 +189,9 @@ func buildRules() *tview.Flex {
 		for i, rule := range RawRules {
 			y := i + 1
 			parts := strings.SplitN(rule, "::", 2)
-			if len(parts) < 2 { continue }
+			if len(parts) < 2 {
+				continue
+			}
 
 			typeStr := "TEXT"
 			pattern := parts[0]
@@ -191,7 +199,7 @@ func buildRules() *tview.Flex {
 				typeStr = "REGEX"
 				pattern = strings.TrimPrefix(pattern, "re:")
 			}
-			
+
 			table.SetCell(y, 0, tview.NewTableCell(" "+typeStr+" ").SetTextColor(ColorDim))
 			table.SetCell(y, 1, tview.NewTableCell(pattern).SetTextColor(ColorText))
 			table.SetCell(y, 2, tview.NewTableCell(parts[1]).SetTextColor(ColorSuccess))
@@ -202,7 +210,7 @@ func buildRules() *tview.Flex {
 	help.SetText("[gray]Edit 'replacements.txt' manually to add rules (UI Editor coming soon)[-]")
 
 	refresh()
-	
+
 	return tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(table, 0, 1, true).
 		AddItem(help, 1, 0, false)
@@ -219,7 +227,7 @@ func RunTUI(port int, cpuCore int) {
 	nav := tview.NewList().ShowSecondaryText(false)
 	nav.SetBorder(true).SetTitle(" Navigation ")
 	nav.SetSelectedBackgroundColor(ColorFocus).SetMainTextColor(ColorText)
-	
+
 	nav.AddItem("Dashboard", "", 'd', func() { pages.SwitchToPage("Dashboard") })
 	nav.AddItem("Voices", "", 'v', func() { pages.SwitchToPage("Voices") })
 	nav.AddItem("Rules", "", 'r', func() { pages.SwitchToPage("Rules") })
@@ -229,11 +237,11 @@ func RunTUI(port int, cpuCore int) {
 	actions := tview.NewList().ShowSecondaryText(false)
 	actions.SetBorder(true).SetTitle(" Actions ")
 	actions.SetSelectedBackgroundColor(ColorFocus)
-	
-	actions.AddItem("Start/Stop Server", "", 's', func() { 
+
+	actions.AddItem("Start/Stop Server", "", 's', func() {
 		// FIX: Run in background to prevent UI freeze
 		go func() {
-			ToggleServer(CurrentConfig.LastModel, CurrentConfig.Port, cpuCore) 
+			ToggleServer(CurrentConfig.LastModel, CurrentConfig.Port, cpuCore)
 		}()
 	})
 
@@ -254,12 +262,16 @@ func RunTUI(port int, cpuCore int) {
 	// Global Keybinds
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyTab {
-			if nav.HasFocus() { app.SetFocus(actions) } else 
-			if actions.HasFocus() { app.SetFocus(pages) } else 
-			{ app.SetFocus(nav) }
+			if nav.HasFocus() {
+				app.SetFocus(actions)
+			} else if actions.HasFocus() {
+				app.SetFocus(pages)
+			} else {
+				app.SetFocus(nav)
+			}
 			return nil
 		}
-		// Ctrl+C Safety Hatch (In case UI logic hangs, this should still catch OS signals if possible, 
+		// Ctrl+C Safety Hatch (In case UI logic hangs, this should still catch OS signals if possible,
 		// but tview usually needs to handle it explicitly here)
 		if event.Key() == tcell.KeyCtrlC {
 			app.Stop()

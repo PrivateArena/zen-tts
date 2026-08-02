@@ -167,7 +167,7 @@ func (e *KittenEngine) Synthesize(text string, voice string, speed float32) ([]f
 	}
 
 	outputData := outTensor.GetData()
-	
+
 	// Trim trailing quiet samples
 	var lastNonZero int = len(outputData) - 1
 	for lastNonZero >= 0 && outputData[lastNonZero] == 0 {
@@ -188,7 +188,6 @@ func (e *KittenEngine) Close() error {
 	return nil
 }
 
-
 func (e *KittenEngine) SynthesizeStream(text string, voice string, speed float32, callback func(samples []float32) bool) error {
 	samples, _, err := e.Synthesize(text, voice, speed)
 	if err != nil {
@@ -197,7 +196,6 @@ func (e *KittenEngine) SynthesizeStream(text string, voice string, speed float32
 	callback(samples)
 	return nil
 }
-
 
 func loadNPZVoices(npzPath string) (map[string][]float32, error) {
 	r, err := zip.OpenReader(npzPath)
