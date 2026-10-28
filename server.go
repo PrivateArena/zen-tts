@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"zen-tts/internal/kitten"
 	"zen-tts/internal/kokoro"
 	"zen-tts/internal/piper"
+	"zen-tts/internal/shared"
 )
 
 var (
@@ -384,21 +387,46 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Synthesize using decoupled engine
+	// Synthesize using decoupled engine. When timings were asked for, this is the one
+	// and only synthesis pass: the audio and its alignment come out of the same call,
+	// so a client can never receive timings of a second, different rendering.
+	timingLevel := timestampsLevel(r, &req)
+
 	startTime := time.Now()
 	var (
 		samples    []float32
 		sampleRate int
 		synthErr   error
+		alignment  shared.Alignment
 	)
-	if hasParams {
-		if pe, ok := synth.(ParameterizedEngine); ok {
-			samples, sampleRate, synthErr = pe.SynthesizeWithParams(text, reqVoice, float32(userSpeed), params)
-		} else {
-			samples, sampleRate, synthErr = synth.Synthesize(text, reqVoice, float32(userSpeed))
+	if timingLevel > 0 {
+		switch t := synth.(type) {
+		case ExactTimingEngine:
+			alignment, synthErr = t.SynthesizeAligned(text, reqVoice, float32(userSpeed))
+			if synthErr == nil {
+				samples, sampleRate = alignment.Samples, alignment.SampleRate
+				if alignment.Source == "" {
+					alignment.Source = shared.TimingSourceUnknown
+				}
+			}
+		case TimingEngine:
+			var timings []shared.WordTiming
+			samples, timings, sampleRate, synthErr = t.SynthesizeWithTimings(text, reqVoice, float32(userSpeed))
+			if synthErr == nil {
+				alignment = shared.Alignment{
+					Samples:    samples,
+					SampleRate: sampleRate,
+					Words:      timings,
+					Source:     shared.TimingSourceUnknown,
+				}
+			}
+		default:
+			// Engine cannot report timings: answer with audio and a null timings field,
+			// exactly as before, rather than failing the request.
+			samples, sampleRate, synthErr = synthesizePlain(synth, text, reqVoice, float32(userSpeed), params, hasParams)
 		}
 	} else {
-		samples, sampleRate, synthErr = synth.Synthesize(text, reqVoice, float32(userSpeed))
+		samples, sampleRate, synthErr = synthesizePlain(synth, text, reqVoice, float32(userSpeed), params, hasParams)
 	}
 	processTime := time.Since(startTime)
 	if synthErr != nil {
@@ -426,33 +454,14 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ?timestamps=1 — return JSON envelope with base64 WAV + word timings
-	if r.URL.Query().Get("timestamps") == "1" {
-		var wavBuf []byte
-		wavBuf = append(wavBuf, makeWavHeader(sampleRate, len(audioData))...)
-		wavBuf = append(wavBuf, audioData...)
-
-		type timingPayload struct {
-			Audio    string      `json:"audio"`
-			Timings  interface{} `json:"timings"`
-			Duration float64     `json:"duration"`
-		}
-		payload := timingPayload{
-			Audio:    base64.StdEncoding.EncodeToString(wavBuf),
-			Duration: audioDuration,
-		}
-
-		// Use TimingEngine if the active synth supports it
-		if te, ok := synth.(TimingEngine); ok {
-			_, timings, _, terr := te.SynthesizeWithTimings(text, reqVoice, float32(userSpeed))
-			if terr == nil {
-				payload.Timings = timings
-			}
-		}
+	// ?timestamps=1 (words) / ?timestamps=2 (words + phonemes) — JSON envelope with the
+	// base64 WAV plus the alignment metadata of this very synthesis.
+	if timingLevel > 0 {
+		resp := buildTimingResponse(alignment, audioDuration, frameRateOf(r, &req), timingLevel, sampleRate, audioData)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		json.NewEncoder(w).Encode(payload)
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
 
@@ -460,4 +469,108 @@ func ttsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	writeWavHeader(w, sampleRate, len(audioData))
 	w.Write(audioData)
+}
+
+// encodeWAV wraps int16 PCM in the same 44-byte RIFF header the plain response streams,
+// so the base64 in the timing envelope is byte-identical to what /tts would have returned.
+func encodeWAV(sampleRate int, pcm []byte) []byte {
+	buf := &bytes.Buffer{}
+	writeWavHeader(buf, sampleRate, len(pcm))
+	buf.Write(pcm)
+	return buf.Bytes()
+}
+
+// synthesizePlain runs the audio-only path, honoring per-request engine parameters.
+func synthesizePlain(synth TTSEngine, text, voice string, speed float32, params map[string]any, hasParams bool) ([]float32, int, error) {
+	if pe, ok := synth.(ParameterizedEngine); ok && hasParams {
+		return pe.SynthesizeWithParams(text, voice, speed, params)
+	}
+	return synth.Synthesize(text, voice, speed)
+}
+
+// timestampsLevel reports the requested timing level: 0 for none, 1 for word level,
+// 2 for word plus phoneme level. The query parameter wins over the JSON body field.
+func timestampsLevel(r *http.Request, req *TTSRequest) int {
+	if q := strings.TrimSpace(r.URL.Query().Get("timestamps")); q != "" {
+		if n, err := strconv.Atoi(q); err == nil {
+			if n > 2 {
+				return 2
+			}
+			if n < 0 {
+				return 0
+			}
+			return n
+		}
+		if b, err := strconv.ParseBool(q); err == nil && b {
+			return 1
+		}
+		return 0
+	}
+	if req != nil && req.Timestamps > 0 {
+		if req.Timestamps > 2 {
+			return 2
+		}
+		return req.Timestamps
+	}
+	return 0
+}
+
+// defaultFrameRate is the animation frame rate assumed when the caller does not ask
+// for one; timings are still reported in seconds.
+const defaultFrameRate = 30.0
+
+// frameRateOf reads the ?fps= (or ?frame_rate=) hint used for the frame_rate field.
+func frameRateOf(r *http.Request, req *TTSRequest) float64 {
+	q := strings.TrimSpace(r.URL.Query().Get("fps"))
+	if q == "" {
+		q = strings.TrimSpace(r.URL.Query().Get("frame_rate"))
+	}
+	if q != "" {
+		if f, err := strconv.ParseFloat(q, 64); err == nil && f > 0 {
+			return f
+		}
+	}
+	if req != nil && req.Fps > 0 {
+		return req.Fps
+	}
+	return defaultFrameRate
+}
+
+// TimingResponse is the ?timestamps JSON envelope. An engine that takes per-request
+// parameters (Inflect) does not expose alignment, so parameters and level-2 timings are
+// mutually exclusive by engine, not by request. The keys that were already on the
+// wire (audio, timings, duration) keep their names and types; everything else is
+// additive, so existing clients are unaffected.
+type TimingResponse struct {
+	Audio        string                 `json:"audio"`
+	Timings      []shared.WordTiming    `json:"timings"`
+	Duration     float64                `json:"duration"`
+	SampleRate   int                    `json:"sample_rate"`
+	FrameRate    float64                `json:"frame_rate"`
+	FrameMS      float64                `json:"frame_ms"`
+	TimingSource string                 `json:"timing_source"`
+	Phonemes     []shared.PhonemeTiming `json:"phonemes,omitempty"`
+}
+
+// buildTimingResponse assembles the envelope from a single synthesis result.
+func buildTimingResponse(alignment shared.Alignment, duration, fps float64, level, sampleRate int, pcm []byte) TimingResponse {
+	resp := TimingResponse{
+		Audio:        base64.StdEncoding.EncodeToString(encodeWAV(sampleRate, pcm)),
+		Duration:     duration,
+		SampleRate:   sampleRate,
+		FrameRate:    fps,
+		TimingSource: shared.TimingSourceUnknown,
+	}
+	if alignment.Source == "" {
+		// No timings available: "timings": null, source "none", as before.
+		resp.TimingSource = "none"
+		return resp
+	}
+	resp.Timings = alignment.Words
+	resp.TimingSource = alignment.Source
+	resp.FrameMS = alignment.FrameMS
+	if level >= 2 {
+		resp.Phonemes = alignment.Phonemes
+	}
+	return resp
 }

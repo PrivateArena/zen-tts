@@ -53,6 +53,9 @@ fhttp/
 utls/
 www/
 piper/
+!internal/piper/
 models/
 *.wav
 clones/
+.scratch/
+_scratch/

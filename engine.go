@@ -38,6 +38,18 @@ type TimingEngine interface {
 	SynthesizeWithTimings(text, voice string, speed float32) ([]float32, []shared.WordTiming, int, error)
 }
 
+// ExactTimingEngine is an optional upgrade to TTSEngine for engines that can align
+// their own audio: one synthesis pass yields the PCM plus word (and, when the model
+// exposes phoneme frames, phoneme) timings taken from the model's duration predictor.
+// Prefer it over TimingEngine: it is a superset and never synthesizes twice.
+// Use type assertion at call sites: if et, ok := synth.(ExactTimingEngine); ok { ... }
+type ExactTimingEngine interface {
+	TTSEngine
+	// SynthesizeAligned synthesizes the text once and returns its audio together with
+	// the alignment metadata that belongs to exactly that audio.
+	SynthesizeAligned(text, voice string, speed float32) (shared.Alignment, error)
+}
+
 // StreamingEngine is an optional upgrade to TTSEngine. Engines that support
 // chunked streaming synthesis implement this interface.
 type StreamingEngine interface {

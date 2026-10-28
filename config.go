@@ -59,6 +59,12 @@ type TTSRequest struct {
 	Engine    string   `json:"engine"`
 	Seed      *int64   `json:"seed,omitempty"`
 	Variation *float64 `json:"variation,omitempty"`
+	// Timestamps asks for the JSON timing envelope: 1 = per word, 2 = per word and per
+	// phoneme. Equivalent to ?timestamps=1 / ?timestamps=2 on the URL, which wins.
+	Timestamps int `json:"timestamps,omitempty"`
+	// Fps is the animation frame rate the caller syncs to; it is echoed back as
+	// frame_rate so clients can map seconds to frames with floor(t * fps).
+	Fps float64 `json:"fps,omitempty"`
 }
 
 // --- GLOBAL STATE ---
