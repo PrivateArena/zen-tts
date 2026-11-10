@@ -1,8 +1,13 @@
 {
   "last_model": "kokoro-v1.0",
-  "port": 5055,
+  "port": 5090,
   "active_engine": "kokoro",
   "engines": {
+    "inflect": {
+      "model": "inflect-micro-v2",
+      "voice": "default",
+      "speed": 1
+    },
     "kitten": {
       "model": "kitten-tts-mini",
       "voice": "luna",
